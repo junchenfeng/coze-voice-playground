@@ -1,0 +1,18 @@
+[project]
+requires = [ "python-3.12", "nodejs-24" ]
+project_type = "web"
+version = "0.1.0"
+appliedPatches = [ ]
+
+# nodejs 不是给业务用的：coze-daemon 会在 runtime shell 退出时清理原进程组，
+# dev.sh 借 node 的 detached spawn 把 uvicorn 挪进独立 session（与参考项目一致）。
+[dev]
+build = [ "bash", "./scripts/prepare.sh" ]
+run = [ "bash", "./scripts/dev.sh" ]
+validate = [ "bash", "./scripts/validate.sh" ]
+deps = [ "git" ]
+
+[deploy]
+build = [ "bash", "./scripts/build.sh" ]
+run = [ "bash", "./scripts/start.sh" ]
+deps = [ "git" ]

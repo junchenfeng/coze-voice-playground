@@ -1,0 +1,4 @@
+# 单独一层：官方 CPU 源，约 200 MB。
+# macOS 上没有 +cpu 后缀的 wheel，本地开发请改装 torch==2.6.0（见 README）。
+--index-url https://download.pytorch.org/whl/cpu
+torch==2.6.0+cpu

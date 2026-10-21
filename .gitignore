@@ -1,0 +1,32 @@
+# 密钥：只从 /projenv 领，永不入库
+.env
+.env.bak
+.env.local
+
+# 虚拟环境与缓存
+.venv
+__pycache__/
+*.pyc
+.pytest_cache/
+.ruff_cache/
+
+# 预置语料 / 合成音频的本地缓存：按 data/seed-manifest.json 重建，删了不心疼
+.cache/
+
+# 用户录音（只在本地，属于使用者的声音）
+data/corpus/
+data/runs/
+data/words/
+data/active.json
+data/synth.json
+
+# 预训练底座（OSS 上有，bootstrap 下载）
+models/backbone/
+
+# 运行时产物
+logs/
+*.log
+.DS_Store
+
+# 本地工具状态（计划草稿等，不属于项目内容）
+.codebuddy/

@@ -1,0 +1,110 @@
+# AGENTS.md
+
+一台「教机器听懂自己声音」的语音训练台：录几条自己的声音 → 训一个小模型 → 喊一声
+看它认不认 → 换一个唤醒词重训。每个扣子编程项目都是独立的一台机器，**没有账户、
+没有工作区**：全站一份语料、一份唤醒词、一份训练记录。
+
+## 技术栈
+
+- Python 3.12 + FastAPI + Uvicorn + Jinja2（原生 JS/CSS，没有前端构建）
+- PyTorch 2.6 CPU（训练，子进程）· onnxruntime（openWakeWord 底座）· numpy（导出包纯 numpy 前向）
+- 存储：目录即状态，没有数据库；音频在本地或 OSS，仓库里只有清单
+
+## 目录
+
+```
+web/            FastAPI 应用
+  app.py        页面 + JSON API + SSE（唯一路由入口）
+  store.py      单数据域存储：语料 / runs / words / active 指针
+  seed.py       预置语料与底座的清单驱动缓存（.cache/seed）
+  oss.py        OSS 最小客户端（V1 签名，纯标准库）
+  jobs.py       训练子进程 + progress.jsonl 尾随 + SSE
+  synth.py      豆包 TTS 合成语料（本地缓存 + 尽力上传 OSS）
+  export.py     部署包（np_cnn.py + model.npz + meta.json，含阈值标定）
+  notes.py      研究笔记读取 / 渲染 / note-log
+  words.py      自定义唤醒词数据集
+  predictor.py  active 模型推理（按 mtime 缓存）
+  audio.py      WAV 解码 + 音量门控
+  settings.py   全部路径与上限（环境变量覆盖）
+  templates/    base / studio / notes
+  static/       app.js / charts.js / recorder.js / style.css
+trainer/        训练与特征
+  models.py     SimpleCNN（1 层卷积）/ CNN（3 层）/ OWWHead / MLP（仅 CLI）
+  np_cnn.py     纯 numpy 前向，原样进部署包（不许 import torch）
+  data.py       1 s 窗口 + 软标签 + 分组切分
+  train.py      训练入口（--model simple|cnn|head|mlp）
+  backbone.py   openWakeWord mel + embedding（onnx）
+scripts/        oss_push / fetch_seed / fetch_projenv / prepare / dev / build / start / validate / bootstrap
+data/           只放元数据与使用者自己录的音频（见 data/README.md）
+note-logs/      GET /note-log/{1..4} 的原始日志（AI 学习伙伴写，本站只读）
+reports/        研究笔记的 markdown 源（发布流程见其 README）
+```
+
+## 硬约束
+
+1. **不提交：** `.env`、`.cache/`、`.venv/`、`data/corpus/`、`data/runs/`、`data/words/`、
+   `data/synth.json`、`models/backbone/`、任何 `*.wav`。
+2. **`data/` 不存预置/合成音频。** 预置语料在 OSS（清单 `data/seed-manifest.json`），
+   合成音频在 `.cache/synth` + OSS `synth/`；`data/` 只留元数据和麦克风录音。
+3. **`trainer/np_cnn.py` 只能依赖 numpy**：它会被原样打进部署包，由桌宠从包目录 import。
+4. **密钥永不回显**：日志、错误、接口响应里都不能出现 `OSS_ACCESS_KEY_SECRET` 或 token。
+5. **文件名即状态**，所以所有外部名字都要过 `store._safe_child`（白名单正则 + resolve
+   前缀校验 + 拒绝 symlink）。
+6. **训练是子进程**（`python -m trainer.train`），不要改成线程里跑 torch。
+7. 单训练并发默认 1（`NOVA_MAX_RUNNING_TRAININGS`）；改大要先确认机器核数。
+
+## 三张模型卡
+
+| 键 | 页面名 | 结构 | 约参数 | 能否导出 |
+| --- | --- | --- | --- | --- |
+| `simple` | 简单 CNN | 1×Conv+BN+ReLU+MaxPool → 统计/注意力池化 → Linear(48,2) | 3k | 能 |
+| `cnn` | 复杂 CNN | 3×Conv（2 次池化）→ 同一套池化 → Linear(96,2) | 14k | 能 |
+| `head` | 预训练底座 | openWakeWord 冻结 mel+embedding → 小判断头 | 底座 2.4 MB | 不能（包太大） |
+
+`mlp` 仍留在 `trainer.train --model` 里复现早期实验，但页面不暴露。
+
+## 接口速查
+
+页面：`/`（→ 303 `/studio`）、`/studio`、`/notes`、`/healthz`
+
+语料：`GET /api/corpus`、`POST /api/corpus/{pos|neg}`、`GET|DELETE /api/corpus/{label}/{name}`、
+`POST /api/corpus/synth`、`GET /api/voices`
+
+唤醒词：`GET|POST /api/words`、`GET /api/words/{wid}`、`POST /api/words/{wid}/clips`、
+`GET|DELETE /api/words/{wid}/clips/{name}`、`POST /api/words/{wid}/synth[/auto]`、
+`GET /api/words/{wid}/synth/progress`
+
+训练：`POST|GET /api/runs`、`GET /api/runs/{id}`、`GET /api/runs/{id}/stream`（SSE）、
+`POST /api/runs/{id}/apply|stop|rerun`、`DELETE /api/runs/{id}`、`GET /api/runs/{id}/export`
+
+推理：`POST /api/predict`（上传 16k wav，返回 `p_wake`）
+
+只读外部接口：`GET /note-log/{1|2|3|4}`（契约见 `note-logs/README.md`）
+
+## 数据从哪里来
+
+- **预置语料**：`scripts/oss_push.py` 上传 → `data/seed-manifest.json` 记录 sha256/时长 →
+  `scripts/fetch_seed.py` 下载到 `.cache/seed/`（训练前 `jobs._prefetch()` 再兜一次）；
+- **合成语料**：豆包 TTS，wav 写 `.cache/synth/`，元数据写 `data/synth.json`，尽力上传 OSS；
+- **麦克风录音**：浏览器转 16k/16bit/单声道 wav，`data/corpus/{pos,neg}` 或 `data/words/<wid>/pos`。
+
+训练时三层一起用：`--data data/corpus`、`--builtin-dir .cache/seed/builtin`、
+`--extra-dir .cache/seed/corpus`。
+
+## 开发与验收
+
+```bash
+bash scripts/prepare.sh          # 首次
+bash scripts/dev.sh              # 5000 端口，日志 logs/server.log
+bash scripts/validate.sh         # pytest
+.venv/bin/python -m pytest tests -q -k export
+```
+
+改 `.coze` 里的入口脚本、`web/settings.py` 的路径口径、`trainer/np_cnn.py` 的权重键时，
+记得同步 `tests/`（`test_export.py` 会逐位比对 torch 与 numpy）。
+
+## 研究笔记
+
+页面 `/notes` 读 `data/research-notes.json`（4 条，本轮 `published:false` 空壳）。
+正文只渲染 `## 摘要` ~ `## 附录`，并强制剥掉「给 Agent 的指令」。发布流程见
+`reports/README.md`；原始日志由外部写入 `note-logs/note-{1..4}.json`，本站只读。

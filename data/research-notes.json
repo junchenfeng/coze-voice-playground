@@ -1,0 +1,38 @@
+[
+ {
+  "id": 1,
+  "title": "录一条自己的声音",
+  "subtitle": "从麦克风到 1 秒窗口：机器到底「听」到了什么",
+  "level": "入门",
+  "source": "reports/note-1.md",
+  "published": false,
+  "markdown": ""
+ },
+ {
+  "id": 2,
+  "title": "教它认一个词",
+  "subtitle": "正例、负例、考卷与阈值：一次完整的训练长什么样",
+  "level": "入门",
+  "source": "reports/note-2.md",
+  "published": false,
+  "markdown": ""
+ },
+ {
+  "id": 3,
+  "title": "简单 CNN 与复杂 CNN",
+  "subtitle": "一层卷积和三层卷积，差的到底是什么",
+  "level": "进阶",
+  "source": "reports/note-3.md",
+  "published": false,
+  "markdown": ""
+ },
+ {
+  "id": 4,
+  "title": "换个词重训",
+  "subtitle": "自定义唤醒词：为什么正例不能复用别人的语料",
+  "level": "进阶",
+  "source": "reports/note-4.md",
+  "published": false,
+  "markdown": ""
+ }
+]

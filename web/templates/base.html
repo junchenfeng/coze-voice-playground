@@ -1,0 +1,48 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
+  <meta name="color-scheme" content="dark">
+  <title>{% block title %}Nova Voice Lab · 唤醒词训练站{% endblock %}</title>
+  <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='9' fill='%23070B14'/%3E%3Cpath d='M8 19c2.6-9 4.4 3 6.6-4S18.8 24 24 12' stroke='%2322D3EE' stroke-width='2.2' fill='none' stroke-linecap='round'/%3E%3C/svg%3E">
+  <link rel="stylesheet" href="/static/style.css">
+</head>
+<body class="{% block body_class %}{% endblock %}" {% block body_attrs %}{% endblock %}>
+  <div class="aurora" aria-hidden="true">
+    <span class="aurora__blob aurora__blob--cyan"></span>
+    <span class="aurora__blob aurora__blob--indigo"></span>
+    <span class="aurora__blob aurora__blob--lime"></span>
+    <span class="aurora__grid"></span>
+  </div>
+
+  {% block content %}{% endblock %}
+
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+
+  <!-- 录音失败等"必须看见"的提示：toast 会自己消失，孩子容易错过 -->
+  <div class="alert" id="alert" role="alertdialog" aria-modal="true" aria-live="assertive" hidden>
+    <div class="alert__card">
+      <b class="alert__title"></b>
+      <p class="alert__body"></p>
+      <p class="alert__hint"></p>
+      <button class="alert__ok" type="button">知道了</button>
+    </div>
+  </div>
+
+  <!-- 删除这类不可恢复的操作：必须再点一次「确认删除」，别让它一键就没了 -->
+  <div class="alert alert--confirm" id="confirm" role="alertdialog" aria-modal="true" hidden>
+    <div class="alert__card">
+      <b class="alert__title" id="confirm-title"></b>
+      <p class="alert__body" id="confirm-body"></p>
+      <p class="alert__hint" id="confirm-hint"></p>
+      <div class="alert__actions">
+        <button class="btn btn--ghost btn--sm" id="confirm-cancel" type="button">取消</button>
+        <button class="btn btn--sm alert__danger" id="confirm-ok" type="button">确认删除</button>
+      </div>
+    </div>
+  </div>
+
+  {% block scripts %}{% endblock %}
+</body>
+</html>

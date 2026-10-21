@@ -1,0 +1,86 @@
+{% extends "base.html" %}
+{% block body_class %}page-notes{% endblock %}
+{% block title %}研究笔记 · Nova Voice Lab{% endblock %}
+
+{% block content %}
+<header class="topbar glass">
+  <a class="brand brand--sm" href="/studio">
+    <span class="brand__mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32" fill="none"><path d="M5 19c2.8-9 4.6 3 6.9-4s4.3 9 9.7-3" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="27" cy="20" r="2.4" fill="currentColor"/></svg>
+    </span>
+    <span class="brand__text"><strong>Nova Voice Lab</strong><small>研究笔记</small></span>
+  </a>
+
+  <nav class="tabs note-tabs" id="note-tabs" aria-label="研究笔记">
+    {% for note in notes %}
+    <button class="tab note-tab{% if note.id == first %} is-active{% endif %}" type="button"
+            data-note="{{ note.id }}" aria-controls="note-pane-{{ note.id }}"
+            aria-selected="{{ 'true' if note.id == first else 'false' }}">
+      笔记 {{ note.id }}{% if not note.published %}<i class="note-tab__dot" title="还没发布"></i>{% endif %}
+    </button>
+    {% endfor %}
+  </nav>
+
+  <div class="topbar__meta">
+    <a class="btn btn--ghost btn--sm" href="/studio">返回训练台</a>
+  </div>
+</header>
+
+<main class="notes">
+  <header class="lead">
+    <span class="lead__step">一路做过的实验，都记在这里</span>
+    <h1>研究笔记</h1>
+    <p class="lead__sub">四份笔记：从录第一条声音，到简单 CNN 与复杂 CNN 的差别。没发布的先留白。</p>
+  </header>
+
+  {% for note in notes %}
+  <section class="note-pane{% if note.id == first %} is-active{% endif %}"
+           id="note-pane-{{ note.id }}" data-note="{{ note.id }}" role="tabpanel">
+    <div class="note-head">
+      <h2>{{ note.title }}</h2>
+      {% if note.subtitle %}<p class="note-sub">{{ note.subtitle }}</p>{% endif %}
+    </div>
+
+    {% if note.published and note.html %}
+      <article class="note-sheet glass">{{ note.html | safe }}</article>
+    {% else %}
+      <div class="note-empty">
+        <span class="note-empty__mark" aria-hidden="true">✎</span>
+        <b>这份笔记还没发布</b>
+        <p>内容整理好之后会出现在这里；现在先把训练台跑通。</p>
+      </div>
+    {% endif %}
+  </section>
+  {% else %}
+  <div class="note-empty">
+    <span class="note-empty__mark" aria-hidden="true">✎</span>
+    <b>还没有笔记</b>
+    <p><code>data/research-notes.json</code> 里补上一条就会被渲染出来。</p>
+  </div>
+  {% endfor %}
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script>
+(() => {
+  "use strict";
+  const tabs = Array.from(document.querySelectorAll(".note-tab"));
+  const panes = Array.from(document.querySelectorAll(".note-pane"));
+  function show(id) {
+    tabs.forEach((tab) => {
+      const on = tab.dataset.note === id;
+      tab.classList.toggle("is-active", on);
+      tab.setAttribute("aria-selected", on ? "true" : "false");
+    });
+    panes.forEach((pane) => pane.classList.toggle("is-active", pane.dataset.note === id));
+    const url = new URL(window.location.href);
+    url.searchParams.set("note", id);
+    window.history.replaceState(null, "", url);
+  }
+  tabs.forEach((tab) => tab.addEventListener("click", () => show(tab.dataset.note)));
+  const want = new URLSearchParams(window.location.search).get("note");
+  if (want && panes.some((p) => p.dataset.note === want)) show(want);
+})();
+</script>
+{% endblock %}
