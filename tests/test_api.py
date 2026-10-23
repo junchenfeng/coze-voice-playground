@@ -336,6 +336,31 @@ def test_rerun_honors_page_params_and_drops_legacy_clip(client, wav_bytes, monke
     assert client.post(f"/api/runs/{original}/rerun", json={"epochs": 0}).status_code == 400
 
 
+def test_build_cmd_passes_dataset_flags():
+    """页面上的两个滑杆 + 真人配额要真落到训练命令行里（参数没生效多半断在这）。"""
+    cfg = {"model": "cnn", "epochs": 7, "batch": 8, "lr": 5e-4, "val_ratio": 0.12,
+           "seed": 42, "split_by": "human", "max_pos": 50, "max_neg": 150,
+           "human_train_pos": 30, "human_train_neg": 50}
+    cmd = jobs._build_cmd("20260101-000000-dead", cfg)
+
+    def val(flag):
+        return cmd[cmd.index(flag) + 1]
+
+    assert val("--epochs") == "7" and val("--batch") == "8"
+    assert float(val("--lr")) == pytest.approx(5e-4)
+    assert val("--max-pos") == "50" and val("--max-neg") == "150"
+    assert val("--human-train-pos") == "30" and val("--human-train-neg") == "50"
+    assert val("--split-by") == "human"
+
+    # 老 config 没有 human_train_* → 兜 settings 的默认配额
+    legacy = dict(cfg)
+    legacy.pop("human_train_pos")
+    legacy.pop("human_train_neg")
+    legacy_cmd = jobs._build_cmd("20260101-000000-dead", legacy)
+    assert legacy_cmd[legacy_cmd.index("--human-train-pos") + 1] == str(
+        settings.HUMAN_TRAIN_POS)
+
+
 def test_runs_list_reports_dataset_sizes(client):
     """模型卡要回报「训练集 / 考卷多大」：/api/runs 必须带 n_train / n_val / human_split。"""
     run_id = make_run(result={
