@@ -63,6 +63,23 @@ reports/        研究笔记的 markdown 源（发布流程见其 README）
 
 `mlp` 仍留在 `trainer.train --model` 里复现早期实验，但页面不暴露。
 
+## 可写根（FaaS 部署形态）
+
+veFaaS 把应用目录挂成**只读**（如 `/opt/bytefaas`），在 BASE_DIR 下 mkdir 直接
+`Errno 30`。`web/settings.py` 用「可写根」统一处理，优先级：
+
+1. 显式 `NOVA_WRITABLE_ROOT`；
+2. BASE_DIR 可写（开发/自托管）→ 一切照旧；
+3. 否则 → `/tmp/nova-runtime-<BASE_DIR指纹>/`。
+
+只读形态下：`DATA_ROOT`/`CACHE_ROOT` 及其派生（corpus/runs/words/active/synth、
+seed/synth/特征缓存）全部落在可写根；随代码打包的只读资源
+（`seed-manifest.json`、`research-notes.json`）仍从 `BASE_DIR/data` 读。
+运行期数据随容器重启丢失（种子/缓存会自动重建，麦克风录音不持久）。
+训练子进程由 `jobs.py` 注入 `NOVA_FEATURE_CACHE` 与 `NOVA_OWW_DIR`
+（trainer 侧变量名与 web 侧不同，见 `trainer/data.py`/`trainer/backbone.py`）。
+给运行时新增任何落盘路径时，必须挂在 `settings.WRITABLE_ROOT` 派生下。
+
 ## 接口速查
 
 页面：`/`（→ 303 `/studio`）、`/studio`、`/notes`、`/healthz`

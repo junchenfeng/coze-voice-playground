@@ -9,8 +9,16 @@
 
 全部路径与上限都走环境变量，测试时只需把 NOVA_DATA_ROOT / NOVA_CACHE_ROOT
 指到临时目录，无需 mock 任何模块级常量（读取方一律 `settings.XXX`）。
+
+**可写根**：FaaS 部署（veFaaS）把应用目录挂成只读（如 /opt/bytefaas），
+在 BASE_DIR 下 mkdir 会直接 Errno 30。所以运行时可写根按序决定：
+显式 NOVA_WRITABLE_ROOT > BASE_DIR（可写时，开发/自托管照旧）> /tmp。
+可写状态（录音、runs、缓存）全部迁到可写根；随代码打包的只读资源
+（seed-manifest.json、research-notes.json）仍从 BASE_DIR/data 读。
 """
+import hashlib
 import os
+import tempfile
 from pathlib import Path
 
 try:                                   # 本地裸跑时读仓库根的 .env；coze 里已由脚本注入
@@ -21,7 +29,44 @@ except ImportError:                    # web 被独立 import（sys.path 里没�
     pass
 
 BASE_DIR = Path(__file__).resolve().parent.parent
-DATA_ROOT = Path(os.environ.get("NOVA_DATA_ROOT", BASE_DIR / "data")).expanduser().resolve()
+
+
+def _is_writable_dir(base: Path) -> bool:
+    """往 base 写一个探针文件判断可写性（只读挂载会抛 OSError）。"""
+    probe = base / ".nova-write-probe"
+    try:
+        with open(probe, "wb") as fh:
+            fh.write(b"ok")
+        probe.unlink(missing_ok=True)
+        return True
+    except OSError:
+        return False
+
+
+def _resolve_writable_root() -> Path:
+    """见模块 docstring「可写根」。按 BASE_DIR 指纹命名，同机多实例不互踩。"""
+    explicit = os.environ.get("NOVA_WRITABLE_ROOT")
+    if explicit:
+        return Path(explicit).expanduser().resolve()
+    if _is_writable_dir(BASE_DIR):
+        return BASE_DIR
+    tag = hashlib.sha256(str(BASE_DIR).encode("utf-8")).hexdigest()[:8]
+    return Path(tempfile.gettempdir()) / f"nova-runtime-{tag}"
+
+
+WRITABLE_ROOT = _resolve_writable_root()
+# 应用目录只读 = FaaS 形态：运行期数据落在 /tmp，随容器重启丢失（缓存/种子会自动重建）
+APP_DIR_READ_ONLY = WRITABLE_ROOT != BASE_DIR
+
+# ── data/ 下的路径：可写状态与只读打包资源分离 ────────────────────────
+# 显式 NOVA_DATA_ROOT（测试、自定义）时一切跟随该根，行为与旧版完全一致。
+_EXPLICIT_DATA = os.environ.get("NOVA_DATA_ROOT")
+if _EXPLICIT_DATA:
+    DATA_ROOT = Path(_EXPLICIT_DATA).expanduser().resolve()
+elif WRITABLE_ROOT != BASE_DIR:
+    DATA_ROOT = WRITABLE_ROOT / "data"
+else:
+    DATA_ROOT = BASE_DIR / "data"
 # 用户录音（麦克风）——唯一留在 data/ 里的音频
 CORPUS_ROOT = DATA_ROOT / "corpus"
 # 训练产物：data/runs/<run_id>/（权重、曲线、日志）
@@ -31,13 +76,19 @@ WORDS_ROOT = DATA_ROOT / "words"
 ACTIVE_PATH = DATA_ROOT / "active.json"
 # 合成语料的元数据索引（wav 本体在 .cache/synth 与 OSS）
 SYNTH_INDEX = DATA_ROOT / "synth.json"
-# 预置语料 / 预训练模型清单（进 git）
-SEED_MANIFEST = DATA_ROOT / "seed-manifest.json"
-# 研究笔记
-RESEARCH_NOTES = DATA_ROOT / "research-notes.json"
+# 预置语料 / 预训练模型清单（进 git）与研究笔记（进 git）：随代码打包，运行期只读。
+# FaaS 下 DATA_ROOT 已迁到 /tmp，这两个必须仍指向打包里的 data/，否则读不到。
+BUNDLED_DATA_ROOT = BASE_DIR / "data"
+if _EXPLICIT_DATA or not APP_DIR_READ_ONLY:
+    SEED_MANIFEST = DATA_ROOT / "seed-manifest.json"
+    RESEARCH_NOTES = DATA_ROOT / "research-notes.json"
+else:
+    SEED_MANIFEST = BUNDLED_DATA_ROOT / "seed-manifest.json"
+    RESEARCH_NOTES = BUNDLED_DATA_ROOT / "research-notes.json"
 
 # 可丢弃的缓存（种子音频、合成音频），删掉后按清单重建
-CACHE_ROOT = Path(os.environ.get("NOVA_CACHE_ROOT", BASE_DIR / ".cache")).expanduser().resolve()
+CACHE_ROOT = Path(os.environ.get("NOVA_CACHE_ROOT",
+                                 WRITABLE_ROOT / ".cache")).expanduser().resolve()
 SEED_CACHE_ROOT = CACHE_ROOT / "seed"
 SYNTH_CACHE_ROOT = CACHE_ROOT / "synth"
 

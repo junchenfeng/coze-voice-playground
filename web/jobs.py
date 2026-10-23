@@ -148,6 +148,11 @@ def start(config: dict) -> str:
     env["PYTHONUNBUFFERED"] = "1"
     env["OMP_NUM_THREADS"] = str(settings.TRAIN_THREADS)
     env["MKL_NUM_THREADS"] = str(settings.TRAIN_THREADS)
+    # FaaS 形态下 BASE_DIR 只读：trainer 侧的特征缓存默认写 BASE_DIR/.cache/features
+    # 会 Errno 30，这里统一指到可写缓存根；底座 onnx 同步对齐 settings 的口径
+    #（trainer/backbone.py 读的是 NOVA_OWW_DIR，变量名与 web 侧的 NOVA_BACKBONE_DIR 不同）。
+    env.setdefault("NOVA_FEATURE_CACHE", str(settings.CACHE_ROOT / "features"))
+    env.setdefault("NOVA_OWW_DIR", str(settings.BACKBONE_DIR))
 
     try:
         with open(log_path, "wb") as log_fp:
