@@ -1,38 +1,11 @@
 [
  {
   "id": 1,
-  "title": "录一条自己的声音",
-  "subtitle": "从麦克风到 1 秒窗口：机器到底「听」到了什么",
-  "level": "入门",
+  "title": "三个模型，同一场考试",
+  "subtitle": "简单 CNN / 复杂 CNN / 预训练底座：参数、时长与成绩",
+  "level": "进阶",
   "source": "reports/note-1.md",
-  "published": false,
-  "markdown": ""
- },
- {
-  "id": 2,
-  "title": "教它认一个词",
-  "subtitle": "正例、负例、考卷与阈值：一次完整的训练长什么样",
-  "level": "入门",
-  "source": "reports/note-2.md",
-  "published": false,
-  "markdown": ""
- },
- {
-  "id": 3,
-  "title": "简单 CNN 与复杂 CNN",
-  "subtitle": "一层卷积和三层卷积，差的到底是什么",
-  "level": "进阶",
-  "source": "reports/note-3.md",
-  "published": false,
-  "markdown": ""
- },
- {
-  "id": 4,
-  "title": "换个词重训",
-  "subtitle": "自定义唤醒词：为什么正例不能复用别人的语料",
-  "level": "进阶",
-  "source": "reports/note-4.md",
-  "published": false,
-  "markdown": ""
+  "published": true,
+  "markdown": "# 三个模型，同一场考试\n\n## 摘要\n\n同一份语料（350 条录音切出的 1350 个 1 秒窗口）、同一张考卷（随机留 12% 做验证）、同样的 30 轮训练，我们在本地把三张模型卡各训了一遍：简单 CNN、复杂 CNN、预训练底座 + 小判断头。把成绩单摆在一起，能看到两条很清楚的规律：**参数越多，训练越慢，成绩越好**；而预训练底座训练飞快、成绩也不差，秘密是——**它的绝大部分参数根本没参与训练**。\n\n## 一、实验怎么做的\n\n- 语料：唤醒词正例 50 条 + 背景负例 300 条，共 350 条录音；\n- 每条录音按 1 秒滑窗切样，一共得到 1350 个窗口，随机留 162 个（12%）当考卷，其余 1188 个用来训练；\n- 三个模型完全同卷：30 轮（epoch）、batch 16、学习率 1e-3、随机种子 42，谁也不许开小灶；\n- 评分口径也一样：训练准确率看训练集，验证准确率只看没训过的考卷——它才是模型真正的成绩。\n\n## 二、成绩单\n\n| 模型 | 总参数 | 实际训练的参数 | 每 epoch 平均时长 | 最终训练准确率 | 最终验证准确率 | 最好验证准确率 |\n| --- | --- | --- | --- | --- | --- | --- |\n| 简单 CNN | 307 | 307（全部） | 0.74 秒 | 71.4% | 70.4% | 74.1% |\n| 复杂 CNN | 14,435 | 14,435（全部） | 1.69 秒 | 90.3% | 84.6% | 85.8% |\n| 预训练底座 + 小头 | 约 61.5 万 | 12,482（仅约 2%） | 0.07 秒 | 81.7% | 78.4% | 84.6% |\n\n两个 CNN 的「总参数」和「训练的参数」一模一样——它们是白纸，每个参数都从头学起。预训练底座不一样：openWakeWord 底座约 60 万参数（2.4 MB）全部冻结，真正在动的只有 192 → 64 → 2 的那个 1.2 万参数小判断头。\n\n## 三、发现一：参数越大，越慢，也越准\n\n从简单 CNN 到复杂 CNN：参数量 ×47（307 → 14,435），每 epoch 平均时长 ×2.3（0.74 秒 → 1.69 秒），验证准确率 +14 分（70.4% → 84.6%）。\n\n为什么会这样？简单 CNN 只有一层 3×3 卷积，一次只能看到很小的局部，听不出「先这个音、再那个音」的先后顺序；复杂 CNN 三层卷积叠起来，感受野更大，能抓住音节之间的长时结构——代价是每一步要做的乘加多了几十倍，训练自然变慢。\n\n参数量、训练时长、模型能力，这三件事是绑在一起的：想要更好的成绩，就得付更多时间。\n\n## 四、发现二：预训练底座为什么又快又不差\n\n<div class=\"note-hand\">\n<p>把三行数据连起来看：</p>\n<p>· 复杂 CNN：14,435 个参数全部在学，每轮 1.69 秒；</p>\n<p>· 底座 + 小头：约 61.5 万个参数里只有 1.25 万（约 2%）在学，每轮只要 0.07 秒，是复杂 CNN 的 1/24；</p>\n<p>· 30 轮下来总共 3.8 秒，复杂 CNN 要 52.3 秒，差了约 14 倍；</p>\n<p>· 但它的最好验证准确率有 84.6%，和复杂 CNN（85.8%）几乎打平，远超简单 CNN（74.1%）。</p>\n<p>为什么快？因为它不是从零开始学「什么是人声」。openWakeWord 底座在海量语音上提前练过，本站把它整个冻住（不训练、不更新），只训练最后那个小判断头——训练的参数少了，每一步自然就快。</p>\n<p>为什么成绩不差？因为底座「见多识广」，声音的通用规律它早就学会了，小头只需要专心学一件事：这个声音像不像我们的唤醒词。</p>\n</div>\n\n## 给 Agent 的指令\n\n- 数据来自 2026-10-23 本地 CLI 训练（与页面训练完全同口径：`--data data/corpus`（空）+ `--builtin-dir .cache/seed/builtin` + `--extra-dir .cache/seed/corpus`，epochs 30 / batch 16 / lr 1e-3 / seed 42 / split-by clip / threads 2 / max-pos 50 / max-neg 300）。\n- `trainer/train.py` 已新增逐 epoch 计时：`history[].epoch_s` 与 `result.avg_epoch_s`；更新本笔记数字时重跑附录命令，替换「成绩单」表格即可。\n- 底座参数量按 `models/backbone/openwakeword/` 两个 onnx（melspectrogram 1.09 MB + embedding 1.33 MB）按 float32 估算，约 60 万；正文表述「约 61.5 万」为底座 + 小头合计。\n\n## 附录\n\n复现命令（在仓库根目录）：\n\n```bash\nfor m in simple cnn head; do\n  .venv/bin/python -m trainer.train \\\n    --data data/corpus --model $m --epochs 30 --batch 16 --lr 1e-3 \\\n    --val-ratio 0.12 --seed 42 --split-by clip \\\n    --max-pos 50 --max-neg 300 --threads 2 \\\n    --out /tmp/note-train/$m.json \\\n    --progress-jsonl /tmp/note-train/$m.progress.jsonl \\\n    --split-json /tmp/note-train/$m.split.json \\\n    --builtin-dir .cache/seed/builtin --extra-dir .cache/seed/corpus\ndone\n```\n\nresult.json 关键字段：`params_total` / `params_trainable`（参数口径）、`avg_epoch_s`（每 epoch 平均时长）、`final`（最终 train/val accuracy）、`history`（逐 epoch 曲线）。本次三个 run 的完整产物在 `/tmp/note-train/`。\n"
  }
 ]

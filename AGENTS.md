@@ -126,6 +126,7 @@ uv pip install --python .venv/bin/python "torch==2.6.0+cpu" -i https://download.
 
 ## 研究笔记
 
-页面 `/notes` 读 `data/research-notes.json`（4 条，本轮 `published:false` 空壳）。
+页面 `/notes` 读 `data/research-notes.json`（当前 1 篇已发布：三模型对比实验）。
 正文只渲染 `## 摘要` ~ `## 附录`，并强制剥掉「给 Agent 的指令」。发布流程见
-`reports/README.md`；原始日志由外部写入 `note-logs/note-{1..4}.json`，本站只读。
+`reports/README.md`（源文件 `reports/note-1.md` 与 JSON 一起换）；原始日志由外部写入
+`note-logs/note-{1..4}.json`，本站只读。

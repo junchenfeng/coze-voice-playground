@@ -114,7 +114,8 @@ def test_note_log_status_codes(tmp_path, monkeypatch):
     assert notes.note_log_text("3") == payload      # 原样返回，不做二次加工
 
 
-def test_notes_route_renders_shell(client):
+def test_notes_route_renders_published(client):
     html = client.get("/notes").text
-    assert "笔记 1" in html and "笔记 4" in html
-    assert "这份笔记还没发布" in html
+    assert "笔记 1" in html and "笔记 4" not in html    # 只有已发布的一篇
+    assert "这份笔记还没发布" not in html
+    assert "note-sheet" in html                         # 正文容器已渲染

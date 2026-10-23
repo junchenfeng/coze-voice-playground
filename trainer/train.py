@@ -195,6 +195,7 @@ def main():
     try:
         for epoch in range(1, args.epochs + 1):
             model.train()
+            ep_t0 = time.time()
             loss_sum, correct, n = 0.0, 0, 0
             for xb, yb, tb in tr_ld:
                 if not args.no_aug:
@@ -213,7 +214,8 @@ def main():
 
             tr_loss, tr_acc = loss_sum / n, correct / n
             va_loss, va_acc = evaluate(model, va_ld)
-            history.append({"epoch": epoch, "train_loss": round(tr_loss, 4),
+            epoch_s = round(time.time() - ep_t0, 2)
+            history.append({"epoch": epoch, "epoch_s": epoch_s, "train_loss": round(tr_loss, 4),
                             "train_acc": round(tr_acc, 4), "val_loss": round(va_loss, 4),
                             "val_acc": round(va_acc, 4)})
             print(f"epoch {epoch:3d}  loss {tr_loss:.4f}  acc {tr_acc:.3f}  "
@@ -249,6 +251,7 @@ def main():
                        else args.split_by),
         "n_builtin": sum(1 for f in files if builtin_prefix and f.startswith(builtin_prefix)),
         "elapsed_s": round(time.time() - t0, 2),
+        "avg_epoch_s": round(sum(h["epoch_s"] for h in history) / max(1, len(history)), 2),
         "final": {"train_acc": history[-1]["train_acc"],
                   "val_acc": history[-1]["val_acc"],
                   "gap": round(history[-1]["train_acc"] - history[-1]["val_acc"], 4)},

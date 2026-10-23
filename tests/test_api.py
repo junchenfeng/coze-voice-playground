@@ -74,11 +74,11 @@ def test_studio_step_param_and_url(client):
     assert _boot_step(client.get("/studio?step=nope").text) == "train"
 
 
-def test_notes_page_empty_state(client):
+def test_notes_page_published_note(client):
     html = client.get("/notes").text
     assert "研究笔记" in html
-    assert html.count("这份笔记还没发布") >= 4
-    assert "笔记 4" in html
+    assert "这份笔记还没发布" not in html      # 唯一一篇已发布：无空态
+    assert "三个模型，同一场考试" in html      # 正文已渲染
 
 
 def test_note_log_contract(client):
