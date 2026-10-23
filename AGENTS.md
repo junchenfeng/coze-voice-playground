@@ -111,6 +111,11 @@ uv pip install --python .venv/bin/python "torch==2.6.0+cpu" -i https://download.
 
 系统缺 python3.12-venv 时先 `apt-get update && apt-get install -y python3.12-venv`。
 
+正因为沙箱掐 Python socket 下载，训练前的种子补下载有总预算
+（`NOVA_SEED_PREFETCH_BUDGET_S`，默认 30s，见 `web/settings.py`）：缓存缺失时逐条
+下载各等满超时会把 POST /api/runs 拖上几个小时；超预算自动停手、只用本地已有的
+（warning 记进 run 的 status）。不要把这个预算改回去掉。
+
 改 `.coze` 里的入口脚本、`web/settings.py` 的路径口径、`trainer/np_cnn.py` 的权重键时，
 记得同步 `tests/`（`test_export.py` 会逐位比对 torch 与 numpy）。
 

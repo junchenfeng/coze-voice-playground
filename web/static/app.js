@@ -209,6 +209,7 @@
       chart: null,
       mode_: "loss",
       es: null,
+      prepWatch: null,
       recorder: null,
       recordingLabel: "",
       recordPending: false,
@@ -377,26 +378,31 @@
     }
 
     // 右上角：当前数据集的语料规模，人工 / 合成 分开，各自（正例/负例）。
+    // 预置语料算合成（chips 的 title 就是这么承诺的）：不带它训练时显示的数字
+    // 会比实际用的小一大截，看的人会以为数据没存上。
     // 自定义词的正例只算词目录，负例按训练口径 = 共享池全部 + 内置语料（内置算合成）。
     function datasetCounts() {
       const corpus = state.corpus || { pos: [], neg: [] };
       const mic = (list) => (list || []).filter((c) => c.source !== "synth").length;
       const synth = (list) => (list || []).filter((c) => c.source === "synth").length;
+      const builtin = corpus.builtin || {};
+      const useBuiltin = $("#use-builtin") ? $("#use-builtin").checked : true;
+      const extra = useBuiltin && builtin.available
+        ? { pos: builtin.pos || 0, neg: builtin.neg || 0 } : { pos: 0, neg: 0 };
       const word = state.dataset ? state.words.find((w) => w.id === state.dataset) : null;
       if (word) {
         const c = word.counts || { mic: 0, synth: 0 };
-        const builtin = corpus.builtin || {};
-        const useBuiltin = $("#use-builtin") ? $("#use-builtin").checked : true;
-        const extra = useBuiltin && builtin.available
-          ? (builtin.pos || 0) + (builtin.neg || 0) : 0;
         return {
           human: { pos: c.mic || 0, neg: mic(corpus.pos) + mic(corpus.neg) },
-          synth: { pos: c.synth || 0, neg: synth(corpus.pos) + synth(corpus.neg) + extra },
+          synth: {
+            pos: (c.synth || 0) + extra.pos,
+            neg: synth(corpus.pos) + synth(corpus.neg) + extra.neg,
+          },
         };
       }
       return {
         human: { pos: mic(corpus.pos), neg: mic(corpus.neg) },
-        synth: { pos: synth(corpus.pos), neg: synth(corpus.neg) },
+        synth: { pos: synth(corpus.pos) + extra.pos, neg: synth(corpus.neg) + extra.neg },
       };
     }
 
@@ -1601,6 +1607,10 @@
     }
 
     function closeStream() {
+      if (state.prepWatch) {
+        clearInterval(state.prepWatch);
+        state.prepWatch = null;
+      }
       if (state.es) {
         state.es.close();
         state.es = null;
@@ -1625,6 +1635,27 @@
       state.epochStart = 0;
       const es = new EventSource(`/api/runs/${runId}/stream`);
       state.es = es;
+      // 「正在准备」超过 30s 还没等到第一个 epoch：起进程 + 装数据偶尔就是慢，
+      // 主动去问一次状态，别让人对着转圈干等；真挂了立刻亮出失败原因。
+      state.prepWatch = setInterval(async () => {
+        if (state.es !== es) return;                      // 已切走 / 已结束
+        if (!$("#train-running").classList.contains("is-prep")) return;
+        let detail = null;
+        try { detail = await api(`/api/runs/${runId}`); } catch { return; }
+        if (state.es !== es) return;
+        const st = (detail.status || {}).state;
+        if (st === "failed" || st === "interrupted") {
+          closeStream();
+          showFailed(detail);
+          toast("这次没学会，日志展开看看", "error");
+        } else if (st === "succeeded") {
+          closeStream();
+          showDone(detail);
+          toast("训好了，看看成绩单", "ok");
+        } else {
+          $("#progress-eta").textContent = "还在准备，这一步很少超过一分钟";
+        }
+      }, 30000);
       es.addEventListener("epoch", (event) => {
         let row = null;
         try { row = JSON.parse(event.data); } catch { return; }

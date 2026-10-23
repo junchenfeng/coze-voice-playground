@@ -13,6 +13,7 @@ import hashlib
 import json
 import os
 import threading
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -152,9 +153,17 @@ def _download(entry: dict, dest: Path) -> int:
     raise SeedError("下载失败：" + (errors[0] if errors else "没有可用地址"))
 
 
-def _walk(entries: list[dict], path_of, verify: bool, download: bool) -> dict:
+def _walk(entries: list[dict], path_of, verify: bool, download: bool,
+          budget_s: float | None = None) -> dict:
+    """逐条把清单条目落到本地；budget_s 限制补下载总时长（命中本地不计入）。
+
+    本沙箱会掐 Python socket 的大文件下载，缺一条就是一次满超时——没有预算的话，
+    缓存一旦清空，一个同步请求能被拖上几个小时。超预算的条目只记 skipped，
+    不算失败：训练本来就设计成"有多少用多少"。
+    """
     stats = {"total": len(entries), "ok": 0, "downloaded": 0, "missing": 0,
-             "failed": 0, "bytes": 0, "warnings": []}
+             "failed": 0, "skipped": 0, "bytes": 0, "warnings": []}
+    started = time.time()
     for entry in entries:
         try:
             dest = path_of(entry)
@@ -168,6 +177,9 @@ def _walk(entries: list[dict], path_of, verify: bool, download: bool) -> dict:
         if not download:
             stats["missing"] += 1
             continue
+        if budget_s is not None and time.time() - started > budget_s:
+            stats["skipped"] += 1
+            continue
         try:
             size = _download(entry, dest)
         except SeedError as exc:
@@ -179,9 +191,10 @@ def _walk(entries: list[dict], path_of, verify: bool, download: bool) -> dict:
     return stats
 
 
-def ensure_local(roots_=None, verify: bool = True, download: bool = True) -> dict:
+def ensure_local(roots_=None, verify: bool = True, download: bool = True,
+                 budget_s: float | None = None) -> dict:
     """把指定根的种子音频准备好；网络异常只记 warning，不阻断训练。"""
-    return _walk(files(roots_), cache_path, verify, download)
+    return _walk(files(roots_), cache_path, verify, download, budget_s)
 
 
 def ensure_models(verify: bool = True, download: bool = True) -> dict:

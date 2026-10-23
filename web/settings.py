@@ -70,6 +70,12 @@ TRAIN_THREADS = int(os.environ.get("NOVA_TRAIN_THREADS", 2))
 TRAIN_TIMEOUT_S = int(os.environ.get("NOVA_TRAIN_TIMEOUT_S", 3 * 3600))
 ERROR_TAIL_BYTES = 20 * 1024
 
+# 训练前补种子语料的总预算（秒）。本沙箱会掐 Python socket 的大文件下载
+# （TLS 握手正常、发完请求收不到数据，urllib 只能等满超时），缓存一旦缺失，
+# 逐条下载能把 POST /api/runs 拖上几个小时——页面看起来就是永远"正在准备"。
+# 超过预算就停：训练继续用本地已有的，warnings 里记一笔。
+SEED_PREFETCH_BUDGET_S = int(os.environ.get("NOVA_SEED_PREFETCH_BUDGET_S", 30))
+
 # SSE 轮询间隔
 SSE_POLL_S = 0.3
 SSE_HEARTBEAT_S = 15.0

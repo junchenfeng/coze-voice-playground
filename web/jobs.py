@@ -87,16 +87,25 @@ def _build_cmd(run_id: str, config: dict) -> list[str]:
 
 
 def _prefetch() -> list[str]:
-    """训练前把清单里的种子音频补齐（已在本地就只做 stat，不读 sha256）。"""
+    """训练前把清单里的种子音频补齐（已在本地就只做 stat，不读 sha256）。
+
+    补下载有总预算（settings.SEED_PREFETCH_BUDGET_S）：本沙箱会掐 Python socket
+    的下载，缺一条就是一次满超时，绝不能让「点一下教它」等上几十分钟。
+    超预算就停手——训练继续用本地已有的，缺什么在 warnings 里说清楚。
+    """
     warnings = []
     for root in SEED_ROOTS:
         if not seed.files([root]):
             continue
         try:
-            stats = seed.ensure_local([root], verify=False, download=True)
+            stats = seed.ensure_local([root], verify=False, download=True,
+                                      budget_s=settings.SEED_PREFETCH_BUDGET_S)
         except seed.SeedError as exc:
             warnings.append(f"清单读不出来：{exc}")
             continue
+        if stats["skipped"]:
+            warnings.append(f"种子语料 {root}: {stats['skipped']} 条补下载超预算，"
+                            "训练先用本地已有的（可稍后跑 scripts/fetch_seed.py 补齐）")
         warnings += [f"种子语料 {root}: {w}" for w in stats["warnings"][:3]]
         if stats["failed"]:
             warnings.append(f"种子语料 {root}: {stats['failed']} 条下载失败，训练只用本地已有的")

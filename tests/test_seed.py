@@ -122,6 +122,41 @@ def test_download_failure_is_warning_not_raise(monkeypatch):
     assert stats["warnings"]
 
 
+def test_budget_skips_remaining_downloads_not_local_hits(monkeypatch):
+    """预算耗尽：剩下的记 skipped 而不是 failed；命中本地的不受预算影响。"""
+    rows = [entry(f"r{i}.wav", "pos", "builtin")[0] for i in range(3)]
+    write_manifest(rows)
+    # 第一条已在本地（命中，不耗预算也不联网），后两条全缺、预算已用完
+    hit, data = entry("r0.wav", "pos", "builtin")
+    path = seed.cache_path(hit)
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_bytes(data)
+    monkeypatch.setattr(settings, "OSS_CDN_BASE", "http://127.0.0.1:9/cdn")
+    monkeypatch.setattr(settings, "OSS_ENDPOINT", "http://127.0.0.1:9")
+
+    def _no_download(entry_, dest):                      # noqa: ANN001
+        raise AssertionError("超预算后不该再发起下载")
+
+    monkeypatch.setattr(seed, "_download", _no_download)
+    stats = seed.ensure_local(["builtin"], verify=False, budget_s=-1)
+    assert stats["ok"] == 1
+    assert stats["skipped"] == 2
+    assert stats["failed"] == 0 and stats["downloaded"] == 0
+
+
+def test_prefetch_budget_becomes_warning(monkeypatch):
+    """jobs._prefetch 把超预算翻译成 warning（进 run 的 status，页面可见）。"""
+    from web import jobs
+
+    rows = [entry(f"r{i}.wav", "pos", "builtin")[0] for i in range(2)]
+    write_manifest(rows)
+    monkeypatch.setattr(settings, "OSS_CDN_BASE", "http://127.0.0.1:9/cdn")
+    monkeypatch.setattr(settings, "OSS_ENDPOINT", "http://127.0.0.1:9")
+    monkeypatch.setattr(settings, "SEED_PREFETCH_BUDGET_S", -1)
+    warnings = jobs._prefetch()
+    assert any("超预算" in w for w in warnings)
+
+
 def test_materialize_only_returns_existing_roots():
     row, data = entry()
     write_manifest([row])
