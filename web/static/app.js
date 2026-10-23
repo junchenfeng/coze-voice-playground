@@ -1611,6 +1611,10 @@
         clearInterval(state.prepWatch);
         state.prepWatch = null;
       }
+      if (state.pollWatch) {
+        clearInterval(state.pollWatch);
+        state.pollWatch = null;
+      }
       if (state.es) {
         state.es.close();
         state.es = null;
@@ -1644,27 +1648,20 @@
         try { detail = await api(`/api/runs/${runId}`); } catch { return; }
         if (state.es !== es) return;
         const st = (detail.status || {}).state;
-        if (st === "failed" || st === "interrupted") {
-          closeStream();
-          showFailed(detail);
-          toast("这次没学会，日志展开看看", "error");
-        } else if (st === "succeeded") {
-          closeStream();
-          showDone(detail);
-          toast("训好了，看看成绩单", "ok");
+        if (st === "failed" || st === "interrupted" || st === "succeeded") {
+          finishRun(runId, detail.status || {});          // 真挂了/已完成：统一收尾
         } else {
           $("#progress-eta").textContent = "还在准备，这一步很少超过一分钟";
         }
       }, 30000);
-      es.addEventListener("epoch", (event) => {
-        let row = null;
-        try { row = JSON.parse(event.data); } catch { return; }
-        const epochs = Number((state.detail && state.detail.config && state.detail.config.epochs) || 30);
+      // 每个epoch把曲线往前推一格：SSE 和轮询兜底共用，push 按 epoch 去重，重复喂也幂等
+      function applyEpochRow(row, detail) {
+        const epochs = Number((detail && detail.config && detail.config.epochs) || 30);
         showTrainPane("running");
         setPrep(false);
         setProgressText(row, epochs);
         if (state.stageChart) state.stageChart.push(row);
-        $("#result-model").innerHTML = modelBadge((state.detail && state.detail.config) || {});
+        $("#result-model").innerHTML = modelBadge((detail && detail.config) || {});
         $("#result-meta").textContent = `学了 ${row.epoch} / ${epochs} 遍`;
         $("#result-when").textContent = "正在一遍一遍地学，曲线会自己长出来";
         syncResultCard();
@@ -1672,32 +1669,61 @@
         $("#chart-empty").hidden = true;
         $("#metric-val").textContent = pct(row.val_acc);
         $("#metric-train").textContent = pct(row.train_acc);
+      }
+
+      // SSE 事件可能被中间代理缓冲甚至掐断（公网预览尤其常见）：一条 2.5s 的
+      // 轮询兜底，用普通请求把漏掉的 epoch 补进曲线、并在结束时收尾——
+      // 保证「曲线自己长出来」不依赖长连接的运气。
+      state.pollWatch = setInterval(async () => {
+        if (state.es !== es) return;                      // 已切走 / 已收尾
+        let detail = null;
+        try { detail = await api(`/api/runs/${runId}`); } catch { return; }
+        if (state.es !== es) return;
+        state.detail = detail;
+        const st = (detail.status || {}).state;
+        if (st && st !== "running" && st !== "queued") {
+          finishRun(runId, detail.status || {});
+          return;
+        }
+        const seen = state.stageChart ? state.stageChart.history.length : 0;
+        (detail.history || []).slice(seen).forEach((row) => applyEpochRow(row, detail));
+      }, 2500);
+      es.addEventListener("epoch", (event) => {
+        let row = null;
+        try { row = JSON.parse(event.data); } catch { return; }
+        applyEpochRow(row, state.detail);
       });
-      es.addEventListener("status", async (event) => {
+      es.addEventListener("status", (event) => {
+        if (state.es !== es) return;                      // 已被轮询兜底收尾
         let status = {};
         try { status = JSON.parse(event.data); } catch { /* noop */ }
-        closeStream();
-        await loadRuns();
-        let detail = null;
-        try { detail = await api(`/api/runs/${runId}`); } catch { /* noop */ }
-        if (detail) {
-          state.detail = detail;
-          renderAdvanced(detail);
-        }
-        if (status.state === "succeeded" && detail && detail.has_ckpt) {
-          // 训完就自动「用这个模型」：孩子不需要理解"应用"这一步
-          try {
-            await api(`/api/runs/${runId}/apply`, { method: "POST" });
-            await refreshActive();
-            toast("训好了，已经换成这个模型", "ok");
-          } catch (err) { toast(err.message, "error"); }
-        }
-        if (status.state === "succeeded") showDone(detail || { result: status });
-        else if (status.state === "failed") { showFailed(detail); toast("这次没学会，日志展开看看", "error"); }
-        else if (status.state === "stopped") { showTrainPane("idle"); toast("已经停下", ""); }
-        else if (status.state === "interrupted") { showFailed(detail); }
+        finishRun(runId, status);
       });
-      es.onerror = () => { /* 断线由浏览器重连；结束后服务端关闭、我们在 status 里主动 close */ };
+      es.onerror = () => { /* 断线由浏览器重连；轮询兜底不依赖它 */ };
+    }
+
+    // 训练结束（成功/失败/停止）：SSE status 与轮询兜底共用这一条收尾路径
+    async function finishRun(runId, status) {
+      closeStream();
+      await loadRuns();
+      let detail = null;
+      try { detail = await api(`/api/runs/${runId}`); } catch { /* noop */ }
+      if (detail) {
+        state.detail = detail;
+        renderAdvanced(detail);
+      }
+      if (status.state === "succeeded" && detail && detail.has_ckpt) {
+        // 训完就自动「用这个模型」：孩子不需要理解"应用"这一步
+        try {
+          await api(`/api/runs/${runId}/apply`, { method: "POST" });
+          await refreshActive();
+          toast("训好了，已经换成这个模型", "ok");
+        } catch (err) { toast(err.message, "error"); }
+      }
+      if (status.state === "succeeded") showDone(detail || { result: status });
+      else if (status.state === "failed") { showFailed(detail); toast("这次没学会，日志展开看看", "error"); }
+      else if (status.state === "stopped") { showTrainPane("idle"); toast("已经停下", ""); }
+      else if (status.state === "interrupted") { showFailed(detail); }
     }
 
     async function selectRun(runId) {
