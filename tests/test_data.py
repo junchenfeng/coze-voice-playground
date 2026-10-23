@@ -251,3 +251,62 @@ def test_windows_cover_full_and_partial_word():
 
     neg = make_windows(pcm, label=0)
     assert [t for _, t in neg] == [0.0, 0.0, 0.0]
+
+
+# ---- 特征缓存：第一次提取后落盘，后续装载不再解码 / 提特征 -----------------
+
+def test_feature_cache_second_load_skips_featurize(tmp_path, monkeypatch):
+    from trainer import data as data_mod
+
+    root = tmp_path / "corpus"
+    _make(str(root), 2, 2)
+    calls = {"n": 0}
+    real = data_mod.logmel
+
+    def counting(win):
+        calls["n"] += 1
+        return real(win)
+
+    monkeypatch.setattr(data_mod, "logmel", counting)
+    a = load_dataset(str(root), model="simple")
+    n_first = calls["n"]
+    assert n_first > 0
+    b = load_dataset(str(root), model="simple")
+    assert calls["n"] == n_first                       # 第二次完全没提特征
+    assert np.array_equal(a[0], b[0])                  # 特征逐位一致
+    assert np.array_equal(a[1], b[1]) and np.array_equal(a[2], b[2])
+    assert a[3] == b[3] and a[4] == b[4] and a[5] == b[5]
+
+
+def test_feature_cache_label_key_and_silence(tmp_path, monkeypatch):
+    from trainer import data as data_mod
+
+    root = tmp_path / "corpus"
+    os.makedirs(root / "pos")
+    os.makedirs(root / "neg")
+    w = (0.2 * np.sin(2 * np.pi * 440 * np.arange(SR) / SR) * 32767).astype("<i2").tobytes()
+    write_wav(str(root / "pos" / "a.wav"), w)
+    write_wav(str(root / "neg" / "b.wav"), w)          # 同内容：sha 相同
+    silent = np.zeros(SR, dtype=np.float32)
+    write_wav(str(root / "neg" / "quiet.wav"), silent.tobytes())
+
+    reads = {"n": 0}
+    real_read = data_mod.read_wav
+
+    def counting_read(path):
+        reads["n"] += 1
+        return real_read(path)
+
+    monkeypatch.setattr(data_mod, "read_wav", counting_read)
+    X, y, t, files, groups, _ = load_dataset(str(root), model="simple",
+                                             max_pos=10, max_neg=10)
+    n_first = reads["n"]
+    assert not any(g.endswith("quiet.wav") for g in groups)        # 无声被跳过
+    assert sum(1 for f in files if f.startswith("pos/a.wav#")) == 9   # 正例 9 窗
+    assert sum(1 for f in files if f.startswith("neg/b.wav#")) == 3   # 负例 3 窗
+
+    X2, y2, t2, files2, groups2, _ = load_dataset(str(root), model="simple",
+                                                  max_pos=10, max_neg=10)
+    assert reads["n"] == n_first                       # 无声条目也走缓存（ok=0）
+    assert np.array_equal(X, X2) and np.array_equal(t, t2)
+    assert files == files2 and groups == groups2

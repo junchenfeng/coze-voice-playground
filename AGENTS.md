@@ -31,7 +31,7 @@ web/            FastAPI 应用
 trainer/        训练与特征
   models.py     SimpleCNN（1 层卷积）/ CNN（3 层）/ OWWHead / MLP（仅 CLI）
   np_cnn.py     纯 numpy 前向，原样进部署包（不许 import torch）
-  data.py       1 s 窗口 + 软标签 + 分组切分
+  data.py       1 s 窗口 + 软标签 + 分组切分 + 特征缓存（.cache/features，按内容 sha256）
   train.py      训练入口（--model simple|cnn|head|mlp）
   backbone.py   openWakeWord mel + embedding（onnx）
 scripts/        oss_push / fetch_seed / fetch_projenv / prepare / dev / build / start / validate / bootstrap
@@ -115,6 +115,11 @@ uv pip install --python .venv/bin/python "torch==2.6.0+cpu" -i https://download.
 （`NOVA_SEED_PREFETCH_BUDGET_S`，默认 30s，见 `web/settings.py`）：缓存缺失时逐条
 下载各等满超时会把 POST /api/runs 拖上几个小时；超预算自动停手、只用本地已有的
 （warning 记进 run 的 status）。不要把这个预算改回去掉。
+
+特征缓存（`trainer/data.py`，目录 `.cache/features`，`NOVA_FEATURE_CACHE` 可覆盖）：
+按「窗口口径指纹 + 模型 + 软标签 + 文件内容 sha256」存 npz。同一条录音只提一次
+特征——head 的 ONNX 逐窗口前向从 ~6.8s 降到 ~0.1s。目录可随时整个删除（退回首次
+提取耗时）；改滑窗口径（SR/WIN/offsets）会因指纹变化自动全部失效，不用手动清。
 
 改 `.coze` 里的入口脚本、`web/settings.py` 的路径口径、`trainer/np_cnn.py` 的权重键时，
 记得同步 `tests/`（`test_export.py` 会逐位比对 torch 与 numpy）。

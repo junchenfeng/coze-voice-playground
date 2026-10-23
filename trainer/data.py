@@ -171,11 +171,14 @@ def _file_sha256(path):
 
 
 def _cache_read(model, label, sha):
-    """命中返回 {"ok", "x", "t"}；无声录音 ok=0（x/t 为空数组）。"""
+    """命中返回 {"ok", "x", "t"}；无声录音 ok=0（x/t 为 None，代表"确认无声"）。"""
     path = os.path.join(_feat_cache_dir(model), f"{label}-{sha}.npz")
     try:
         with np.load(path) as z:
-            return {"ok": int(z["ok"]), "x": z["x"], "t": z["t"]}
+            ok = int(z["ok"])
+            if ok == 0:
+                return {"ok": 0, "x": None, "t": None}
+            return {"ok": 1, "x": z["x"], "t": z["t"]}
     except (OSError, ValueError, KeyError, EOFError):
         return None
 
