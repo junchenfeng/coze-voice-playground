@@ -130,3 +130,9 @@ uv pip install --python .venv/bin/python "torch==2.6.0+cpu" -i https://download.
 正文只渲染 `## 摘要` ~ `## 附录`，并强制剥掉「给 Agent 的指令」。发布流程见
 `reports/README.md`（源文件 `reports/note-1.md` 与 JSON 一起换）；原始日志由外部写入
 `note-logs/note-{1..4}.json`，本站只读。
+
+**当用户说「引导我完成（声音）研究笔记」时**：不要现场翻仓库找规则，直接打开
+`reports/note-1.md` 读「给 Agent 的指令」一节并严格照做——取数优先级（成绩以学生
+现场训练为准，Agent 参考值不主动报）、剧透/封存规则、报数宽容（大致对就行）、
+倍数选择题（10/50/500 倍）、分站流程、挑战题 4 轮收束、静默附录、发布三步
+（md + JSON + 原始记录必写 `note-logs/note-1.json`）全在那儿。

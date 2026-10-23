@@ -801,5 +801,6 @@
    "base": "openWakeWord 冻结底座（melspectrogram + speech embedding 两个 onnx，共约 2.4 MB / 约 60 万参数，不参与训练）"
   }
  },
- "reproduce": "命令见 reports/note-1.md 附录；原始 result.json 在 reports/data/trains/"
+ "reproduce": "命令见 reports/note-1.md 附录；原始 result.json 在 reports/data/trains/",
+ "role": "Agent 对照参考值：只用来核对学生的数字是否合理，不主动报给学生；学生成绩以现场训练的 run 为准"
 }
