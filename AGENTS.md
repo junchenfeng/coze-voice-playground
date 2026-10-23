@@ -106,7 +106,9 @@ pip install，改用 uv 直装（已装在 /root/.local/bin）：
 
 ```bash
 uv pip install --python .venv/bin/python -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
-uv pip install --python .venv/bin/python "torch==2.6.0+cpu" -i https://download.pytorch.org/whl/cpu
+uv pip install --python .venv/bin/python "torch==2.6.0+cpu" \
+  --find-links https://mirrors.aliyun.com/pytorch-wheels/cpu/ \
+  -i https://mirrors.aliyun.com/pypi/simple/
 ```
 
 系统缺 python3.12-venv 时先 `apt-get update && apt-get install -y python3.12-venv`。
