@@ -443,7 +443,26 @@ body[data-mode="free"] .link-btn { display: none; }
 .param-row__head .hint { font-size: 11.5px; }
 .slider-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 6px 18px; }
 
-.metric-row { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; }
+.dataset-panels { display: grid; gap: 12px; margin: 14px 0 18px; }
+.dataset-panels[hidden], #legacy-size-controls[hidden], #legacy-builtin-control[hidden] { display: none; }
+.dataset-panel { padding: 14px; border: 1px solid var(--line);
+  border-radius: var(--r-md); background: rgba(7, 11, 20, 0.35); }
+.dataset-panel__head { display: flex; justify-content: space-between; gap: 12px;
+  align-items: baseline; margin-bottom: 10px; }
+.dataset-panel__head b { color: var(--text-1); font-size: 15px; }
+.dataset-panel__head small { color: var(--text-3); font-size: 11px; }
+.preset-grid { display: grid; grid-template-columns: repeat(3, 1fr); gap: 9px; }
+.preset-card { display: flex; flex-direction: column; gap: 5px; padding: 11px 12px;
+  border: 1px solid var(--line); border-radius: var(--r-sm); cursor: pointer;
+  background: rgba(7, 11, 20, 0.35); }
+.preset-card input { position: absolute; opacity: 0; }
+.preset-card b { font-size: 13px; }
+.preset-card small { color: var(--text-3); line-height: 1.5; }
+.preset-card.is-active { border-color: var(--cyan); background: rgba(34, 211, 238, 0.1); }
+.preset-card:focus-within { outline: 2px solid var(--cyan); outline-offset: 2px; }
+@media (max-width: 650px) { .preset-grid { grid-template-columns: 1fr; } }
+
+.metric-row { display: grid; grid-template-columns: repeat(auto-fit, minmax(115px, 1fr)); gap: 8px; }
 .metric-row > div {
   padding: 10px 12px; border-radius: var(--r-sm);
   background: rgba(7, 11, 20, 0.4); border: 1px solid var(--line);
@@ -456,6 +475,8 @@ body[data-mode="free"] .link-btn { display: none; }
 .legend { display: inline-flex; align-items: center; gap: 7px; font-size: 11px; color: var(--text-3); }
 .legend__line { width: 18px; height: 2px; border-radius: 2px; background: var(--cyan); }
 .legend__line--dash { background: transparent; border-top: 2px dashed var(--lime); height: 0; }
+.legend__line--synth { background: transparent; border-top: 2px dashed #fb923c; height: 0; }
+.legend-synth[hidden], #metric-synth-wrap[hidden] { display: none; }
 
 .chart-wrap {
   position: relative; border-radius: var(--r-md); overflow: hidden;

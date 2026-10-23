@@ -71,6 +71,9 @@ def _build_cmd(run_id: str, config: dict) -> list[str]:
     ]
     if config.get("init_seed") is not None:
         cmd += ["--init-seed", str(config["init_seed"])]
+    if config.get("dataset_preset"):
+        cmd += ["--dataset-preset", str(config["dataset_preset"]),
+                "--val-preset", str(config.get("val_preset") or "standard")]
 
     # 预置语料：缓存里没有就当场不传（页面另行提示「先跑 fetch_seed.py」），
     # 绝不能因为一次网络抖动让训练直接失败。
@@ -82,6 +85,9 @@ def _build_cmd(run_id: str, config: dict) -> list[str]:
     corpus_seed = seed.local_root("corpus")
     if corpus_seed.is_dir():
         cmd += ["--extra-dir", str(corpus_seed)]
+    dataset_seed = seed.local_root("dataset")
+    if config.get("dataset_preset") and dataset_seed.is_dir():
+        cmd += ["--extra-dir", str(dataset_seed)]
 
     # 自定义唤醒词：正例只从词目录来，上面的 pos 全部改标负例
     wake = config.get("wake_word") or {}
@@ -92,7 +98,7 @@ def _build_cmd(run_id: str, config: dict) -> list[str]:
     return cmd
 
 
-def _prefetch() -> list[str]:
+def _prefetch(extra_roots=()) -> list[str]:
     """训练前把清单里的种子音频补齐（已在本地就只做 stat，不读 sha256）。
 
     补下载有总预算（settings.SEED_PREFETCH_BUDGET_S）：本沙箱会掐 Python socket
@@ -100,7 +106,7 @@ def _prefetch() -> list[str]:
     超预算就停手——训练继续用本地已有的，缺什么在 warnings 里说清楚。
     """
     warnings = []
-    for root in SEED_ROOTS:
+    for root in (*SEED_ROOTS, *extra_roots):
         if not seed.files([root]):
             continue
         try:
@@ -138,7 +144,7 @@ def start(config: dict) -> str:
         (run_path / "progress.jsonl").write_text("", encoding="utf-8")
 
     # 下载放到锁外：可能几秒，不能把「查询运行状态」的请求一起卡住
-    warnings = _prefetch()
+    warnings = _prefetch(("dataset",) if config.get("dataset_preset") else ())
     status = store.read_status(run_id)
     status.update({"state": "preparing", "warnings": warnings})
     store.write_status(run_id, status)

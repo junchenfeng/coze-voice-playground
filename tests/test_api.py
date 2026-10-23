@@ -210,6 +210,23 @@ def test_run_requires_corpus(client, monkeypatch):
     assert "语料不足" in res.json()["detail"]
 
 
+def test_fixed_train_and_validation_presets_reach_job(client, monkeypatch):
+    captured = {}
+    monkeypatch.setattr(store, "builtin_summary", lambda: {"available": True,
+                                                              "pos": 50, "neg": 300})
+    monkeypatch.setattr(jobs, "start", lambda config: captured.update(config) or "demo-run")
+    response = client.post("/api/runs", json={"model": "cnn",
+                                              "dataset_preset": "balanced_humans",
+                                              "val_preset": "standard_plus_recordings"})
+    assert response.status_code == 200, response.text
+    assert captured["dataset_preset"] == "balanced_humans"
+    assert captured["val_preset"] == "standard_plus_recordings"
+    assert captured["max_pos"] == 50 and captured["max_neg"] == 150
+    cmd = jobs._build_cmd("20260101-000000-dead", captured)
+    assert cmd[cmd.index("--dataset-preset") + 1] == "balanced_humans"
+    assert cmd[cmd.index("--val-preset") + 1] == "standard_plus_recordings"
+
+
 def test_run_created_with_valid_config(client, wav_bytes, monkeypatch):
     seed_corpus(client, wav_bytes, "pos", n=4)
     seed_corpus(client, wav_bytes, "neg", n=4)

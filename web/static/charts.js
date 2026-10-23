@@ -50,9 +50,9 @@
 
     _series() {
       if (this.mode === "acc") {
-        return { a: "train_acc", b: "val_acc", fmt: (v) => `${Math.round(v * 100)}%`, min: 0, max: 1 };
+        return { a: "train_acc", b: "val_acc", c: "synth_val_acc", fmt: (v) => `${Math.round(v * 100)}%`, min: 0, max: 1 };
       }
-      return { a: "train_loss", b: "val_loss", fmt: (v) => v.toFixed(2), min: null, max: null };
+      return { a: "train_loss", b: "val_loss", c: "synth_val_loss", fmt: (v) => v.toFixed(2), min: null, max: null };
     }
 
     draw() {
@@ -73,6 +73,7 @@
         rows.forEach((r) => {
           if (Number.isFinite(r[cfg.a])) vals.push(r[cfg.a]);
           if (Number.isFinite(r[cfg.b])) vals.push(r[cfg.b]);
+          if (Number.isFinite(r[cfg.c])) vals.push(r[cfg.c]);
         });
         if (!vals.length) { lo = 0; hi = 1; }
         else {
@@ -165,9 +166,11 @@
         }
         line("train_loss", "#22d3ee", false);
         line("val_loss", "#a3e635", true);
+        line("synth_val_loss", "#fb923c", true);
       } else {
         line("train_acc", "#22d3ee", false);
         line("val_acc", "#a3e635", true);
+        line("synth_val_acc", "#fb923c", true);
       }
     }
 

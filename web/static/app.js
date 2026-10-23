@@ -18,6 +18,8 @@
     idle: "待选择", queued: "排队中", running: "训练中", succeeded: "已完成",
     failed: "失败", stopped: "已暂停", interrupted: "已中断", unknown: "未知",
   };
+  const VAL_LABEL = { synthetic: "纯合成验证集", standard: "标准验证集",
+    standard_plus_recordings: "标准＋录音验证集" };
 
   /* ------------------------------------------------------------ 基础 */
   const toastEl = $("#toast");
@@ -740,6 +742,9 @@
     function updateDatasetNote() {
       const note = $("#dataset-note");
       if (!note) return;
+      $("#showcase-presets").hidden = !!state.dataset;
+      $("#legacy-size-controls").hidden = !state.dataset;
+      $("#legacy-builtin-control").hidden = !state.dataset;
       const w = state.dataset ? state.words.find((x) => x.id === state.dataset) : null;
       note.textContent = w
         ? `「${w.text}」：正例 ${w.counts.mic} 条真人 + ${w.counts.synth} 条合成；`
@@ -1193,6 +1198,12 @@
         $$(".model-card").forEach((c) => c.classList.toggle("is-active", c.contains(input) && input.checked));
       });
     });
+    $$("#preset-grid input, #val-preset-grid input").forEach((input) => {
+      input.addEventListener("change", () => {
+        $$(".preset-card", input.closest(".preset-grid")).forEach((card) =>
+          card.classList.toggle("is-active", card.contains(input) && input.checked));
+      });
+    });
 
     // 内置语料勾选会影响自定义词数据集的负例口径 → 顺手刷新右上角统计
     const builtinToggle = $("#use-builtin");
@@ -1221,8 +1232,12 @@
         use_builtin: $("#use-builtin") ? $("#use-builtin").checked : true,
       };
       if (state.dataset) body.wake_word_id = state.dataset;
+      else {
+        body.dataset_preset = ($("#preset-grid input:checked") || {}).value || "balanced_humans";
+        body.val_preset = ($("#val-preset-grid input:checked") || {}).value || "standard";
+      }
       for (const [key, value] of Object.entries(body)) {
-        if (key === "model" || key === "use_builtin" || key === "wake_word_id") continue;
+        if (["model", "use_builtin", "wake_word_id", "dataset_preset", "val_preset"].includes(key)) continue;
         if (!Number.isFinite(value)) {
           toast("进阶里的数字要填对", "error");
           return null;
@@ -1318,6 +1333,9 @@
     function renderStageCard(detail, { running = false } = {}) {
       const cfg = (detail && detail.config) || {};
       const result = (detail && detail.result) || {};
+      const valLabel = VAL_LABEL[cfg.val_preset] || "验证集";
+      document.querySelectorAll(".primary-val-label").forEach((el) => { el.textContent = valLabel; });
+      $("#metric-val-label").textContent = valLabel + " loss";
       $("#result-model").innerHTML = modelBadge(cfg);
 
       const meta = [];
@@ -1331,9 +1349,12 @@
         if (Number.isFinite(result.n_train)) meta.push(`训练 ${fmtCount(result.n_train)} 窗`);
         if (Number.isFinite(result.n_val)) {
           const split = result.human_split || {};
-          const humanVal = split.val ? Number(split.val[0] || 0) + Number(split.val[1] || 0) : 0;
+          const humanVal = cfg.val_preset === "synthetic" ? 0
+            : split.val ? Number(split.val[0] || 0) + Number(split.val[1] || 0) : 0;
           meta.push(`考卷 ${fmtCount(result.n_val)} 窗` + (humanVal ? `（真人 ${humanVal} 条）` : ""));
         }
+        if (Number.isFinite(result.n_synth_val) && result.n_synth_val > 0)
+          meta.push(`合成考卷 ${fmtCount(result.n_synth_val)} 窗`);
         const secs = Number(result.elapsed_s);
         if (Number.isFinite(secs)) meta.push(`${secs.toFixed(1)} 秒`);
         const params = Number(result.params_total);
@@ -1567,13 +1588,22 @@
       const result = detail.result || {};
       const status = detail.status || {};
       const final = result.final || status.final || {};
+      const valLabel = VAL_LABEL[(detail.config || {}).val_preset] || "验证集";
+      document.querySelectorAll(".primary-val-label").forEach((el) => { el.textContent = valLabel; });
+      $("#metric-val-label").textContent = valLabel + " loss";
       const history = detail.history || [];
       // 主指标是 loss：老 run 的 final 里可能没有 loss 字段，回落到 history 最后一行
       const last = history[history.length - 1] || {};
       const valLoss = Number.isFinite(final.val_loss) ? final.val_loss : last.val_loss;
       const trainLoss = Number.isFinite(final.train_loss) ? final.train_loss : last.train_loss;
+      const synthLoss = Number.isFinite(final.synth_val_loss)
+        ? final.synth_val_loss : last.synth_val_loss;
       $("#metric-val").textContent = fmtLoss(valLoss);
       $("#metric-train").textContent = fmtLoss(trainLoss);
+      $("#metric-synth").textContent = fmtLoss(synthLoss);
+      const hasSynth = history.some((row) => Number.isFinite(row.synth_val_loss));
+      document.querySelectorAll(".legend-synth").forEach((el) => { el.hidden = !hasSynth; });
+      $("#metric-synth-wrap").hidden = !hasSynth;
       $("#metric-params").textContent = result.params_total
         ? (result.params_total / 1000).toFixed(1) + "k" : "--";
       $("#metric-time").textContent = fmtTime(result.elapsed_s || status.elapsed_s);
@@ -1686,6 +1716,11 @@
         $("#chart-empty").hidden = true;
         $("#metric-val").textContent = fmtLoss(row.val_loss);
         $("#metric-train").textContent = fmtLoss(row.train_loss);
+        if (Number.isFinite(row.synth_val_loss)) {
+          $("#metric-synth").textContent = fmtLoss(row.synth_val_loss);
+          $("#metric-synth-wrap").hidden = false;
+          document.querySelectorAll(".legend-synth").forEach((el) => { el.hidden = false; });
+        }
       }
 
       // SSE 事件可能被中间代理缓冲甚至掐断（公网预览尤其常见）：一条 2.5s 的
@@ -1816,6 +1851,10 @@
         wake_word_id: state.dataset || null,
         default_word: !state.dataset,
       };
+      if (!state.dataset) {
+        body.dataset_preset = ($("#preset-grid input:checked") || {}).value || "balanced_humans";
+        body.val_preset = ($("#val-preset-grid input:checked") || {}).value || "standard";
+      }
       const word = state.dataset ? wordTextOf(state.dataset) : state.wakeWord;
       setBusy($("#btn-rerun"), true);
       try {

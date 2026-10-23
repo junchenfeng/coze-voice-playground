@@ -14,6 +14,7 @@ head 的特征不是梅尔谱，而是 openWakeWord 预训练底座的 192 维�
     --extra-dir   额外根，可重复（.cache/seed/corpus 这类历史语料）
 """
 import argparse
+import copy
 import json
 import os
 import time
@@ -26,6 +27,7 @@ from torch.utils.data import DataLoader, TensorDataset
 from .data import (HUMAN_TRAIN_NEG, HUMAN_TRAIN_POS, MAX_NEG_CLIPS, MAX_POS_CLIPS,
                    load_dataset, make_split)
 from .models import build, count_params
+from .showcase import PRESETS, VAL_PRESETS, load_or_create_plan, select_sets
 
 
 def load_state(path):
@@ -70,15 +72,30 @@ def _weight(tb):
     return torch.where(tb > 0.5, 4.0, 1.0)
 
 
-def evaluate(model, loader):
+def evaluate(model, loader, balanced=False):
     model.eval()
     loss, correct, n = 0.0, 0, 0
+    by_class = {0: [0.0, 0, 0], 1: [0.0, 0, 0]}
     with torch.no_grad():
         for xb, yb, tb in loader:
             out = model(xb)
             loss += soft_ce(out, tb, _weight(tb)).item() * len(yb)
             correct += (out.argmax(1) == yb).sum().item()
             n += len(yb)
+            if balanced:
+                for lab in (0, 1):
+                    mask = yb == lab
+                    count = int(mask.sum())
+                    if count:
+                        by_class[lab][0] += soft_ce(out[mask], tb[mask],
+                                                     _weight(tb[mask])).item() * count
+                        by_class[lab][1] += int((out[mask].argmax(1) == yb[mask]).sum())
+                        by_class[lab][2] += count
+    if balanced:
+        if not all(by_class[lab][2] for lab in (0, 1)):
+            raise ValueError("均衡验证需要正负两类录音")
+        return (sum(by_class[lab][0] / by_class[lab][2] for lab in (0, 1)) / 2,
+                sum(by_class[lab][1] / by_class[lab][2] for lab in (0, 1)) / 2)
     return loss / n, correct / n
 
 
@@ -135,6 +152,8 @@ def main():
                     help="自定义唤醒词目录（读 <pos-dir>/pos/*.wav 作正例）")
     ap.add_argument("--wake-word", default=None,
                     help="唤醒词原文，只写进 result.json 便于溯源，不影响训练")
+    ap.add_argument("--dataset-preset", choices=PRESETS, default=None)
+    ap.add_argument("--val-preset", choices=VAL_PRESETS, default="standard")
     args = ap.parse_args()
 
     torch.set_num_threads(args.threads)
@@ -156,17 +175,57 @@ def main():
     stats: dict = {}
     X, y, target, files, groups, meta = load_dataset(
         args.data, extra_roots, model=args.model,
-        pos_dir=args.pos_dir, max_pos=args.max_pos, max_neg=args.max_neg, stats=stats,
-        human_train=(args.human_train_pos, args.human_train_neg))
+        pos_dir=args.pos_dir,
+        max_pos=100000 if args.dataset_preset else args.max_pos,
+        max_neg=100000 if args.dataset_preset else args.max_neg, stats=stats,
+        human_train=(100000, 100000) if args.dataset_preset else
+                    (args.human_train_pos, args.human_train_neg))
     builtin_prefix = (os.path.basename(os.path.normpath(builtin_dir)) + "/") if builtin_dir else ""
 
     split_path = args.split_json or os.path.join(args.data, f"split-{args.split_by}.json")
     os.makedirs(os.path.dirname(split_path) or ".", exist_ok=True)
     human_groups = stats.get("human_groups") or []
     holdout = stats.get("val_groups") or []      # 装载时切好的真人考卷（固定不变）
-    val_idx = make_split(y, files, meta, args.val_ratio, args.seed,
-                         out=split_path, split_by=args.split_by, groups=groups,
-                         human_groups=human_groups, val_groups=holdout)
+    if args.dataset_preset:
+        manifest = os.path.join(args.data, "showcase-dataset.json")
+        plan = load_or_create_plan(groups, y, manifest)
+        train_groups, val_groups, synth_groups = select_sets(
+            plan, groups, y, args.dataset_preset, args.val_preset)
+        selected_groups = set(train_groups) | set(val_groups) | set(synth_groups)
+        keep = np.array([g in selected_groups for g in groups], dtype=bool)
+        X, y, target = X[keep], y[keep], target[keep]
+        files = [f for f, selected_row in zip(files, keep) if selected_row]
+        groups = [g for g, selected_row in zip(groups, keep) if selected_row]
+        val_set = set(val_groups)
+        val_idx = np.flatnonzero(np.array([g in val_set for g in groups]))
+        synth_idx = (np.flatnonzero(np.array([g in set(synth_groups) for g in groups]))
+                     if args.val_preset != "synthetic" else np.array([], dtype=int))
+        holdout = val_groups
+        from .data import is_synth
+        label = dict(zip(groups, map(int, y)))
+        stats["human_split"] = {
+            "train": {lab: sum(label[g] == lab and not is_synth(g)
+                               for g in train_groups) for lab in (0, 1)},
+            "val": {lab: sum(label[g] == lab for g in val_groups) for lab in (0, 1)},
+        }
+        stats["pos"] = {"after": 50, "limit": 50, "human": stats["human_split"]["train"][1],
+                        "synth": 50 - stats["human_split"]["train"][1]}
+        stats["neg"] = {"after": 150, "limit": 150, "human": stats["human_split"]["train"][0],
+                        "synth": 150 - stats["human_split"]["train"][0]}
+        with open(split_path, "w", encoding="utf-8") as f:
+            json.dump({"train_groups": train_groups, "val_groups": val_groups,
+                       "synth_val_groups": synth_groups if len(synth_idx) else [],
+                       "train": [file for file, group in zip(files, groups)
+                                 if group in set(train_groups)],
+                       "val": [files[i] for i in val_idx],
+                       "val_preset": args.val_preset,
+                       "dataset_preset": args.dataset_preset},
+                      f, ensure_ascii=False, indent=2)
+    else:
+        synth_idx = np.array([], dtype=int)
+        val_idx = make_split(y, files, meta, args.val_ratio, args.seed,
+                             out=split_path, split_by=args.split_by, groups=groups,
+                             human_groups=human_groups, val_groups=holdout)
     if args.split_by == "human":
         hs = stats.get("human_split") or {"train": {}, "val": {}}
         tr, va = hs["train"], hs["val"]
@@ -181,6 +240,8 @@ def main():
         progress_fp = open(args.progress_jsonl, "a", encoding="utf-8")
     val_mask = np.zeros(len(y), dtype=bool)
     val_mask[val_idx] = True
+    synth_mask = np.zeros(len(y), dtype=bool)
+    synth_mask[synth_idx] = True
 
     if args.model == "head":
         xt = torch.from_numpy(X)                       # (N,192)
@@ -188,8 +249,10 @@ def main():
         xt = torch.from_numpy(X).unsqueeze(1)          # (N,1,40,100)
     yt = torch.from_numpy(y)
     tt = torch.from_numpy(target)
-    tr_ds = TensorDataset(xt[~val_mask], yt[~val_mask], tt[~val_mask])
+    tr_ds = TensorDataset(xt[~(val_mask | synth_mask)], yt[~(val_mask | synth_mask)],
+                          tt[~(val_mask | synth_mask)])
     va_ds = TensorDataset(xt[val_mask], yt[val_mask], tt[val_mask])
+    synth_ds = TensorDataset(xt[synth_mask], yt[synth_mask], tt[synth_mask])
 
     # CNN 的 BatchNorm 遇到 batch=1 会直接报错：训练集除以 batch 余 1 时丢掉最后一条。
     # 简单 CNN 同样带 BatchNorm，规则一致。
@@ -198,6 +261,7 @@ def main():
                  and train_n % args.batch == 1)
     tr_ld = DataLoader(tr_ds, batch_size=args.batch, shuffle=True, drop_last=drop_last)
     va_ld = DataLoader(va_ds, batch_size=64, shuffle=False)
+    synth_ld = DataLoader(synth_ds, batch_size=64, shuffle=False) if len(synth_idx) else None
 
     model = build(args.model)
     params_total = count_params(model)
@@ -205,6 +269,7 @@ def main():
     opt = torch.optim.Adam([p for p in model.parameters() if p.requires_grad], lr=args.lr)
 
     history = []
+    best_state, best_epoch, best_val_loss = None, None, float("inf")
     try:
         for epoch in range(1, args.epochs + 1):
             model.train()
@@ -226,11 +291,19 @@ def main():
                 n += len(yb)
 
             tr_loss, tr_acc = loss_sum / n, correct / n
-            va_loss, va_acc = evaluate(model, va_ld)
+            va_loss, va_acc = evaluate(model, va_ld, balanced=bool(args.dataset_preset))
+            synth_loss, synth_acc = (evaluate(model, synth_ld, balanced=True)
+                                     if synth_ld is not None else (None, None))
             epoch_s = round(time.time() - ep_t0, 2)
-            history.append({"epoch": epoch, "epoch_s": epoch_s, "train_loss": round(tr_loss, 4),
+            row = {"epoch": epoch, "epoch_s": epoch_s, "train_loss": round(tr_loss, 4),
                             "train_acc": round(tr_acc, 4), "val_loss": round(va_loss, 4),
-                            "val_acc": round(va_acc, 4)})
+                            "val_acc": round(va_acc, 4)}
+            if synth_ld is not None:
+                row.update(synth_val_loss=round(synth_loss, 4),
+                           synth_val_acc=round(synth_acc, 4))
+            history.append(row)
+            if args.dataset_preset and va_loss < best_val_loss:
+                best_state, best_epoch, best_val_loss = copy.deepcopy(model.state_dict()), epoch, va_loss
             print(f"epoch {epoch:3d}  loss {tr_loss:.4f}  acc {tr_acc:.3f}  "
                   f"val_loss {va_loss:.4f}  val_acc {va_acc:.3f}", flush=True)
             if progress_fp:
@@ -241,15 +314,23 @@ def main():
         if progress_fp:
             progress_fp.close()
 
+    if best_state is not None:
+        model.load_state_dict(best_state)
+    chosen = history[(best_epoch or len(history)) - 1]
+
     result = {
         "model": args.model,
         "split_by": args.split_by,
+        "dataset_preset": args.dataset_preset,
+        "val_preset": args.val_preset if args.dataset_preset else None,
+        "best_epoch": best_epoch,
         "params_total": params_total,
         "params_trainable": params_trainable,
         "n_total": int(len(y)),
         "n_clips": int(len(set(groups))),
-        "n_train": int((~val_mask).sum()),
+        "n_train": int((~(val_mask | synth_mask)).sum()),
         "n_val": int(val_mask.sum()),
+        "n_synth_val": int(synth_mask.sum()),
         "n_pos": int(y.sum()),
         "n_neg": int((1 - y).sum()),
         "n_pos_windows": int((target >= 0.9).sum()),
@@ -261,17 +342,21 @@ def main():
         # 装载口径：正/负各最多多少条、抽样前后多少条、真人是否存在
         "sampled": {key: stats.get(key) for key in ("pos", "neg")},
         "human_split": stats.get("human_split"),
-        "val_source": ("human" if args.split_by == "human" and holdout
+        "val_source": (args.val_preset if args.dataset_preset else
+                       "human" if args.split_by == "human" and holdout
                        else args.split_by),
         "n_builtin": sum(1 for f in files if builtin_prefix and f.startswith(builtin_prefix)),
         "elapsed_s": round(time.time() - t0, 2),
         "avg_epoch_s": round(sum(h["epoch_s"] for h in history) / max(1, len(history)), 2),
-        "final": {"train_acc": history[-1]["train_acc"],
-                  "val_acc": history[-1]["val_acc"],
+        "final": {"train_acc": chosen["train_acc"],
+                  "val_acc": chosen["val_acc"],
                   # 训练过程中的主指标是 loss：页面实时卡与曲线都读这两个字段
-                  "train_loss": history[-1]["train_loss"],
-                  "val_loss": history[-1]["val_loss"],
-                  "gap": round(history[-1]["train_acc"] - history[-1]["val_acc"], 4)},
+                  "train_loss": chosen["train_loss"],
+                  "val_loss": chosen["val_loss"],
+                  **({"synth_val_loss": chosen["synth_val_loss"],
+                      "synth_val_acc": chosen["synth_val_acc"]}
+                     if synth_ld is not None else {}),
+                  "gap": round(chosen["train_acc"] - chosen["val_acc"], 4)},
         "history": history,
     }
     os.makedirs(os.path.dirname(args.out) or ".", exist_ok=True)

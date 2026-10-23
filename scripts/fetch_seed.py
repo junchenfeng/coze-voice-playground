@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """按 `data/seed-manifest.json` 把预置语料 / 预训练底座下载到本地缓存。
 
-    python scripts/fetch_seed.py                 # 补齐 builtin + corpus（训练要用的两层）
+    python scripts/fetch_seed.py                 # 补齐 builtin + corpus + dataset
     python scripts/fetch_seed.py --all           # 连 dataset / online 这些归档根一起下
     python scripts/fetch_seed.py --models-only   # 只下 2 个 onnx 底座（prepare.sh 用）
     python scripts/fetch_seed.py --check         # 只体检，不下载（返回码 1 表示缺文件）
@@ -22,8 +22,8 @@ from web import seed  # noqa: E402
 
 def main(argv=None) -> int:
     ap = argparse.ArgumentParser(description="按清单下载预置语料与预训练底座")
-    ap.add_argument("--roots", default="builtin,corpus",
-                    help="要下载的语料根（逗号分隔），默认 builtin,corpus")
+    ap.add_argument("--roots", default="builtin,corpus,dataset",
+                    help="要下载的语料根（逗号分隔），默认 builtin,corpus,dataset")
     ap.add_argument("--all", action="store_true", help="下载清单里的全部根")
     ap.add_argument("--models-only", action="store_true", help="只下载预训练模型")
     ap.add_argument("--check", action="store_true", help="只检查，不下载")

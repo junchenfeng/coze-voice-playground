@@ -303,11 +303,19 @@ class RunIn(BaseModel):
     init_seed: int | None = None      # 初始化/打乱顺序的种子；不传 = 跟 seed 一致
     use_builtin: bool = True          # 预置语料默认参与训练，可取消勾选
     wake_word_id: str | None = None   # 自定义唤醒词数据集；不传 = 默认词 buddy助手
+    dataset_preset: str | None = None
+    val_preset: str = "standard"
 
 
 def _validate_run(body: RunIn) -> dict:
     if body.model not in settings.MODELS:
         raise StoreError("模型只能是 simple / cnn / head")
+    if body.dataset_preset is not None:
+        from trainer.showcase import PRESETS, VAL_PRESETS
+        if body.dataset_preset not in PRESETS or body.val_preset not in VAL_PRESETS:
+            raise StoreError("训练集或验证集选项无效")
+        if body.wake_word_id:
+            raise StoreError("固定训练与验证集只适用于默认唤醒词")
     if not 1 <= body.epochs <= 300:
         raise StoreError("epochs 需在 1~300 之间")
     if not 2 <= body.batch <= 128:
@@ -332,7 +340,7 @@ def _validate_run(body: RunIn) -> dict:
     #   自定义词 —— 正例只认词目录的真人录音（≥ MIN_WORD_POS），负例由本地 +
     #     预置语料的**全部**片段充当（老词的正例对新词是难负例，见 trainer/data.py）。
     counts = store.corpus_summary()["counts"]
-    builtin = store.builtin_summary() if body.use_builtin else {"available": False}
+    builtin = store.builtin_summary() if body.use_builtin or body.dataset_preset else {"available": False}
     wake = None
     if body.wake_word_id:
         record = words.require_ready(body.wake_word_id)
@@ -370,8 +378,10 @@ def _validate_run(body: RunIn) -> dict:
         "lr": float(body.lr),
         "val_ratio": float(body.val_ratio),
         "seed": body.seed,          # 只决定考卷（页面固定默认值）
-        "max_pos": int(body.max_pos),
-        "max_neg": int(body.max_neg),
+        "max_pos": 50 if body.dataset_preset else int(body.max_pos),
+        "max_neg": 150 if body.dataset_preset else int(body.max_neg),
+        "dataset_preset": body.dataset_preset,
+        "val_preset": body.val_preset if body.dataset_preset else None,
         # 真人进训练集的配额（其余固定当考卷）：配额固定给满，见 trainer/data.py
         "human_train_pos": int(settings.HUMAN_TRAIN_POS),
         "human_train_neg": int(settings.HUMAN_TRAIN_NEG),
@@ -379,8 +389,9 @@ def _validate_run(body: RunIn) -> dict:
         "split_by": "human",
         # 初始化起点默认随机：同一份声音 + 同一个 seed 训两遍会逐位相同，
         # 孩子会以为"根本没重新训练"。random 起点让每次都能看到曲线不一样。
-        "init_seed": body.init_seed if body.init_seed is not None else secrets.randbelow(2 ** 31),
-        "use_builtin": bool(body.use_builtin),
+        "init_seed": (body.init_seed if body.init_seed is not None else
+                      42 if body.dataset_preset else secrets.randbelow(2 ** 31)),
+        "use_builtin": bool(body.use_builtin or body.dataset_preset),
         # 自定义唤醒词：老 run 没有这个字段 = 默认词，前端据此决定模型名前缀
         "wake_word": wake,
         "created_at": time.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -494,6 +505,8 @@ class RerunIn(BaseModel):
     max_neg: int | None = None
     wake_word_id: str | None = None
     default_word: bool = False
+    dataset_preset: str | None = None
+    val_preset: str | None = None
 
 
 @app.post("/api/runs/{run_id}/rerun")
@@ -514,6 +527,8 @@ def rerun(run_id: str, body: RerunIn | None = None):
         wake_id = None                       # 学生切回了默认数据集
     else:
         wake_id = wake.get("id")             # 没动数据集：沿用原 run 的词
+    chosen_preset = (over.dataset_preset if over.dataset_preset is not None
+                     else None if wake_id else cfg.get("dataset_preset"))
     run_body = RunIn(model=over.model or cfg.get("model", "cnn"),
                      epochs=int(over.epochs if over.epochs is not None
                                 else cfg.get("epochs", 30)),
@@ -526,7 +541,9 @@ def rerun(run_id: str, body: RerunIn | None = None):
                                  else cfg.get("max_pos", settings.TRAIN_MAX_POS)),
                      max_neg=int(over.max_neg if over.max_neg is not None
                                  else cfg.get("max_neg", settings.TRAIN_MAX_NEG)),
-                     init_seed=secrets.randbelow(2 ** 31),
+                     dataset_preset=chosen_preset,
+                     val_preset=over.val_preset or cfg.get("val_preset") or "standard",
+                     init_seed=42 if chosen_preset else secrets.randbelow(2 ** 31),
                      use_builtin=bool(cfg.get("use_builtin", True)),
                      wake_word_id=wake_id)
     new_cfg = _validate_run(run_body)

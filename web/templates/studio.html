@@ -207,7 +207,8 @@
         <canvas id="stage-chart" height="180" role="img" aria-label="训练曲线"></canvas>
         <div class="result-card__legend">
           <span title="Loss 越低越好"><i class="legend__line"></i>它练的 Loss</span>
-          <span title="Loss 越低越好"><i class="legend__line legend__line--dash"></i>它考的 Loss</span>
+          <span title="所选验证集，Loss 越低越好"><i class="legend__line legend__line--dash"></i><span class="primary-val-label">标准验证集</span></span>
+          <span class="legend-synth" hidden><i class="legend__line legend__line--synth"></i>合成考卷</span>
         </div>
         <p class="result-card__when" id="result-when"></p>
       </div>
@@ -215,10 +216,29 @@
 
     <!-- 数据集：默认词 / 当前自定义词。放在进阶外面，学生一眼能看到"现在在教哪个词" -->
     <div class="dataset-row">
-      <span class="dataset-row__label">数据集</span>
+      <span class="dataset-row__label">唤醒词</span>
       <div class="segmented segmented--sm" id="dataset-tabs" role="tablist" aria-label="训练数据集"></div>
     </div>
     <p class="hint" id="dataset-note">默认数据集：你录的「{{ wake_word }}」+ 预置语料。</p>
+
+    <div class="dataset-panels" id="showcase-presets">
+      <section class="dataset-panel" aria-labelledby="train-set-title">
+        <div class="dataset-panel__head"><b id="train-set-title">训练集</b><small>每组 50 条正例、150 条负例</small></div>
+        <div class="preset-grid" id="preset-grid">
+          <label class="preset-card"><input type="radio" name="dataset-preset" value="synthetic"><b>① 纯合成</b><small>50 / 150 条合成录音</small></label>
+          <label class="preset-card"><input type="radio" name="dataset-preset" value="few_humans"><b>② 少量真人</b><small>10 / 15 条真人 + 合成</small></label>
+          <label class="preset-card is-active"><input type="radio" name="dataset-preset" value="balanced_humans" checked><b>③ 多人均衡</b><small>30 / 50 条真人 + 合成</small></label>
+        </div>
+      </section>
+      <section class="dataset-panel" aria-labelledby="val-set-title">
+        <div class="dataset-panel__head"><b id="val-set-title">验证集</b><small>考卷录音不进入训练集</small></div>
+        <div class="preset-grid" id="val-preset-grid">
+          <label class="preset-card"><input type="radio" name="val-preset" value="synthetic"><b>① 纯合成</b><small>9 正 / 27 负，各 81 窗</small></label>
+          <label class="preset-card is-active"><input type="radio" name="val-preset" value="standard" checked><b>② 标准</b><small>真人 10 正 / 30 负，各 90 窗</small></label>
+          <label class="preset-card"><input type="radio" name="val-preset" value="standard_plus_recordings"><b>③ 标准＋录音</b><small>标准考卷＋本机录入的正负例；按类别均衡计分</small></label>
+        </div>
+      </section>
+    </div>
 
     <details class="adv" id="train-adv">
       <summary>进阶：曲线 / 换模型 / 参数 / 历史</summary>
@@ -247,7 +267,7 @@
             <input id="epochs" type="number" min="1" max="300" value="30"></label>
         </div>
 
-        <div class="param-row">
+        <div class="param-row" id="legacy-size-controls">
           <div class="param-row__head">
             <b>训练数据集大小</b>
             <span class="hint">上限是训练集总条数：真人固定 30 / 50 条进训练（其余当考卷），剩下的名额给合成语料，人声不够时由合成音补满。</span>
@@ -264,7 +284,7 @@
           </div>
         </div>
 
-        <label class="check">
+        <label class="check" id="legacy-builtin-control">
           <input id="use-builtin" type="checkbox" checked>
           <span>带上预置语料<b id="builtin-count"></b>（存在 OSS，首次训练前自动下载）</span>
         </label>
@@ -276,7 +296,8 @@
           </div>
           <span class="legend">
             <i class="legend__line"></i>train
-            <i class="legend__line legend__line--dash"></i>val
+            <i class="legend__line legend__line--dash"></i><span class="primary-val-label">标准验证集</span>
+            <span class="legend-synth" hidden><i class="legend__line legend__line--synth"></i>合成 val</span>
           </span>
         </div>
 
@@ -286,7 +307,8 @@
         </div>
 
         <div class="metric-row">
-          <div><span>val_loss</span><b id="metric-val">--</b></div>
+          <div><span id="metric-val-label">标准 val_loss</span><b id="metric-val">--</b></div>
+          <div id="metric-synth-wrap" hidden><span>合成 val_loss</span><b id="metric-synth">--</b></div>
           <div><span>train_loss</span><b id="metric-train">--</b></div>
           <div><span>参数量</span><b id="metric-params">--</b></div>
           <div><span>耗时</span><b id="metric-time">--</b></div>
