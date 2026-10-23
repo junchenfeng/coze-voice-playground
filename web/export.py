@@ -1,13 +1,13 @@
-"""部署包：把一次 CNN 训练打包成桌宠能直接跑的轻量模型。
+"""部署包：把 CNN 或 HEAD 训练结果打包给桌宠。
 
-包很小（~60 KB），因为桌宠侧不做训练、也没有 torch：
+包只包含小型分类器权重；HEAD 的 ONNX 底座通过 OSS 清单下载：
     buddy-wake-<run_id>.zip
-    ├── np_cnn.py    纯 numpy 前向（简单 CNN / 复杂 CNN 共用一份，与 trainer/np_cnn.py 逐字节相同）
+    ├── np_cnn.py / np_head.py    纯 numpy 前向（简单 CNN / 复杂 CNN 共用一份，与 trainer/np_cnn.py 逐字节相同）
     ├── model.npz    float32 权重
     └── meta.json    特征参数 / 标定好的阈值 / sha256 / 自检向量 / 唤醒词
 
 两件容易翻车的事，这里都处理了：
-1. **阈值不能沿用 0.70/0.85**。那是 head 模型调出来的；同一份语料上 CNN 用
+1. **阈值不能沿用 0.70/0.85**。那是旧 head 模型调出来的；同一份语料上 CNN 用
    0.70/0.85 的误报率约为 head 的 3 倍。导出时按生产滑窗口径（1 s 窗 / 300 ms
    跳 / 能量门控）重新扫一遍，按「误报 ≤6% 且召回最大」给建议值。语料就是训练
    语料，所以这个数字是**上界**，meta.basis 里写明口径。
@@ -24,7 +24,7 @@ import zipfile
 
 import numpy as np
 
-from trainer import np_cnn
+from trainer import np_cnn, np_head
 from trainer.data import read_wav
 
 from . import seed, settings, store, words
@@ -35,9 +35,10 @@ SCHEMA = 1
 EVAL_WIN, EVAL_HOP, EVAL_PAD = 16000, 4800, 8000
 RMS_GATE, PEAK_GATE = 0.008, 0.02
 DEFAULT_THR, DEFAULT_HIGH = 0.70, 0.85
-MAX_CALIB_CLIPS = 240          # 两侧各最多取这么多条：一次导出 ~1 s
+MAX_CALIB_CLIPS = 240
+MAX_HEAD_CALIB_CLIPS = 24          # 两侧各最多取这么多条：一次导出 ~1 s
 SELFTEST_SEED = 1234
-EXPORTABLE = ("simple", "cnn")
+EXPORTABLE = ("simple", "cnn", "head")
 
 
 # ---------------------------------------------------------------- 标定
@@ -129,7 +130,7 @@ def _bases(wake, run_id=None):
 def thresholds(model, wake=None, run_id=None):
     """在语料上滑窗扫阈值；语料不够就退回默认值并标明 basis。"""
     pos_dirs, neg_dirs = _bases(wake, run_id)
-    half = MAX_CALIB_CLIPS // 2
+    half = (MAX_HEAD_CALIB_CLIPS if isinstance(model, np_head.NumpyHead) else MAX_CALIB_CLIPS) // 2
     pos = _load_clips(pos_dirs, half, skip_synth=bool(wake))
     basis_extra = ""
     if wake and not pos:
@@ -188,9 +189,7 @@ def build_package(run_id: str) -> tuple[bytes, str]:
         raise StoreError("只有训练成功的运行才能导出", 409)
     model_name = str(cfg.get("model") or "")
     if model_name not in EXPORTABLE:
-        raise StoreError(
-            "桌宠目前只吃 CNN 模型：请用简单 CNN / 复杂 CNN 再训一版（head 依赖 2.4 MB 的"
-            "预训练底座，包会大 40 倍；MLP 效果最弱）", 409)
+        raise StoreError("桌宠只能导出简单 CNN、复杂 CNN 或 HEAD 模型", 409)
     run_path = store.run_dir(run_id)
     ckpt = run_path / "model.pt"
     if not ckpt.is_file():
@@ -200,11 +199,15 @@ def build_package(run_id: str) -> tuple[bytes, str]:
 
     from trainer.train import load_state
 
-    keys = np_cnn.weights_for(model_name)
+    from trainer import backbone
+
+    runtime = np_head if model_name == "head" else np_cnn
+    keys = np_head.WEIGHT_KEYS if model_name == "head" else np_cnn.weights_for(model_name)
     sd = load_state(str(ckpt))
     state = {k: v.detach().cpu().numpy().astype(np.float32)
              for k, v in sd.items() if k in keys}
-    model = np_cnn.load_from_state(state, model_name)
+    model = (np_head.NumpyHead(state, backbone.DEFAULT_DIR) if model_name == "head"
+             else np_cnn.load_from_state(state, model_name))
 
     wake = cfg.get("wake_word") or None
     thr = thresholds(model, wake, run_id)
@@ -212,8 +215,9 @@ def build_package(run_id: str) -> tuple[bytes, str]:
     buf = io.BytesIO()
     np.savez(buf, **state)
     npz = buf.getvalue()
-    src = pathlib.Path(np_cnn.__file__).read_bytes()
-    expect = round(model.predict(np_cnn.selftest_window(SELFTEST_SEED)), 6)
+    src = pathlib.Path(runtime.__file__).read_bytes()
+    expect = round(model.predict(runtime.selftest_window(SELFTEST_SEED)), 6)
+    runtime_name = "np_head.py" if model_name == "head" else "np_cnn.py"
 
     result = store.read_result(run_id) or {}
     try:
@@ -233,15 +237,16 @@ def build_package(run_id: str) -> tuple[bytes, str]:
         "warning": (f"标定召回只有 {thr['recall']:.0%}：这版模型对唤醒词很不敏感，"
                     f"建议多录几条正例（尤其真人）后重训" if thr.get("recall", 1) < 0.6 else None),
         "params": int(sum(v.size for v in state.values())),
-        "feature": dict(np_cnn.FEATURES),
+        "feature": dict(runtime.FEATURES),
+        "backbone": np_head.BACKBONE if model_name == "head" else None,
         "thresholds": thr,
         "selftest": {"seed": SELFTEST_SEED, "expect": expect},
-        "sha256": {"model.npz": _sha256(npz), "np_cnn.py": _sha256(src)},
+        "sha256": {"model.npz": _sha256(npz), runtime_name: _sha256(src)},
     }
 
     out = io.BytesIO()
     with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as zf:
-        zf.writestr("np_cnn.py", src)
+        zf.writestr(runtime_name, src)
         zf.writestr("model.npz", npz)
         zf.writestr("meta.json", json.dumps(meta, ensure_ascii=False, indent=1))
     return out.getvalue(), f"buddy-wake-{run_id}.zip"

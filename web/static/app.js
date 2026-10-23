@@ -12,8 +12,8 @@
   // 模型卡与历史行的显示名：配置里存的是 simple / cnn / head
   const MODEL_LABEL = { simple: "简单 CNN", cnn: "复杂 CNN", head: "预训练底座", mlp: "MLP" };
   const modelLabel = (name) => MODEL_LABEL[String(name || "")] || String(name || "?").toUpperCase();
-  // 能导出给桌宠的：两种 CNN（head 要带 2.4 MB 底座，包会大 40 倍）
-  const EXPORTABLE = ["simple", "cnn"];
+  // 能导出给桌宠的：两种 CNN 与 HEAD（底座由桌宠从 OSS 获取）
+  const EXPORTABLE = ["simple", "cnn", "head"];
   const STATE_LABEL = {
     idle: "待选择", queued: "排队中", running: "训练中", succeeded: "已完成",
     failed: "失败", stopped: "已暂停", interrupted: "已中断", unknown: "未知",
@@ -1515,7 +1515,7 @@
             <button class="btn btn--primary btn--sm" type="button" data-act="apply"
                     ${run.active ? "disabled" : ""}>${run.active ? "正在使用" : "使用"}</button>
             <button class="btn btn--outline btn--sm" type="button" data-act="export"
-                    ${deployable ? "" : 'disabled title="只有简单 / 复杂 CNN 能导出：head 依赖预训练底座，包会大 40 倍"'}>为桌宠下载</button>
+                    ${deployable ? "" : 'disabled title="仅 CNN 和 HEAD 可导出"'}>为桌宠下载</button>
             <button class="btn btn--ghost btn--sm model-tile__del" type="button" data-act="delete">删除</button>
           </div>`;
         deck.appendChild(tile);
@@ -1616,14 +1616,14 @@
       $("#btn-apply").disabled = !(status.state === "succeeded" && detail.has_ckpt) || detail.active;
       $("#btn-apply").textContent = detail.active ? "已是用着的模型" : "用这个模型";
 
-      // 部署包支持两种 CNN（桌宠侧是纯 numpy 前向，head 要带 2.4 MB 底座）
+      // CNN 与 HEAD 都可导出；HEAD 底座在桌宠安装时获取
       const deploy = $("#btn-deploy");
       if (deploy) {
         const deployable = EXPORTABLE.includes(String((detail.config || {}).model || ""));
         deploy.disabled = !(status.state === "succeeded" && detail.has_ckpt && deployable);
-        deploy.textContent = deployable ? "部署到桌宠" : "只有 CNN 能导出";
-        deploy.title = deployable ? "下载 ~60 KB 的模型包，桌宠一条命令装上"
-          : "head 依赖预训练底座，包会大 40 倍；先用简单 / 复杂 CNN 训一版";
+        deploy.textContent = deployable ? "部署到桌宠" : "仅 CNN / HEAD 可导出";
+        deploy.title = deployable ? "下载小型模型包；HEAD 底座在桌宠安装时从 OSS 获取"
+          : "HEAD 底座将在桌宠安装时从 OSS 下载";
       }
       // 提示只在刚点过的那次运行上显示，切换运行就收起来
       const hint = $("#deploy-hint");

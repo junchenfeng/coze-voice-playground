@@ -124,11 +124,11 @@ def test_selftest_roundtrip(client, tmp_path, model):
 
 
 def test_export_rejects_non_cnn(client):
-    for model in ("mlp", "head"):
+    for model in ("mlp",):
         run_id = make_run(model)
         res = client.get(f"/api/runs/{run_id}/export")
         assert res.status_code == 409
-        assert "只吃 CNN" in res.json()["detail"]
+        assert "只能导出" in res.json()["detail"]
 
 
 def test_export_requires_succeeded(client):
@@ -187,3 +187,34 @@ def test_validate_prefers_recall_when_corpus_is_hard(client, tmp_path, wav_bytes
     thr = meta["thresholds"]
     if thr["basis"].startswith("corpus-replay"):
         assert thr["fpr"] <= 0.06 or thr["basis"].endswith("(weak)")
+
+
+def test_head_export_contract_and_forward(client, tmp_path):
+    """HEAD package contains only its small head, and matches torch inference."""
+    from trainer import np_head, backbone
+    from trainer.models import OWWHead
+    import torch
+    import hashlib
+
+    run_id = make_run(model="head")
+    res = client.get(f"/api/runs/{run_id}/export")
+    assert res.status_code == 200, res.text
+    files = open_zip(res.content)
+    assert set(files) == {"np_head.py", "model.npz", "meta.json"}
+    meta = meta_of(files)
+    assert meta["model"] == "head"
+    assert len(meta["backbone"]) == 2
+    assert all(item["url"].startswith("https://") for item in meta["backbone"])
+    assert all(hashlib.sha256((pathlib.Path(backbone.DEFAULT_DIR) / item["name"]).read_bytes()).hexdigest() == item["sha256"] for item in meta["backbone"])
+    assert len(res.content) < 100_000
+    assert files["np_head.py"] == pathlib.Path(np_head.__file__).read_bytes()
+    ckpt = store.run_dir(run_id) / "model.pt"
+    net = OWWHead().eval()
+    net.load_state_dict(torch.load(ckpt, map_location="cpu", weights_only=True))
+    with np.load(io.BytesIO(files["model.npz"]), allow_pickle=False) as data:
+        fast = np_head.NumpyHead({key: data[key] for key in np_head.WEIGHT_KEYS}, backbone.DEFAULT_DIR)
+    pcm = np_head.selftest_window(meta["selftest"]["seed"])
+    with torch.no_grad():
+        expected = torch.softmax(net(torch.from_numpy(backbone.embed(pcm)[None, :])), dim=1)[0, 1].item()
+    assert fast.predict(pcm) == pytest.approx(expected, abs=1e-5)
+    assert fast.predict(pcm) == pytest.approx(meta["selftest"]["expect"], abs=1e-5)

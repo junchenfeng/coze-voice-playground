@@ -30,7 +30,7 @@ bash scripts/dev.sh                                    # http://localhost:5000
    看曲线逐轮长出来。
 3. **喊一声试试**：浏览器实时录音，每 300ms 打一次 `/api/predict`，看它认不认。
 4. **新唤醒词**（可选）：换个词，正例只收这个词的录音，负例自动用全部语料。
-5. **我的模型**：应用 / 删除 / 重训 / 导出部署包（`buddy-wake-<run_id>.zip`，约 60 KB）。
+5. **我的模型**：应用 / 删除 / 重训 / 导出 CNN / HEAD 部署包（`buddy-wake-<run_id>.zip`；HEAD 底座由桌宠从 OSS 校验下载）。
 
 ## 目录与约束
 

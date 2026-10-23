@@ -59,7 +59,7 @@ reports/        研究笔记的 markdown 源（发布流程见其 README）
 | --- | --- | --- | --- | --- |
 | `simple` | 简单 CNN | 1×Conv+BN+ReLU+MaxPool → 统计/注意力池化 → Linear(48,2) | 3k | 能 |
 | `cnn` | 复杂 CNN | 3×Conv（2 次池化）→ 同一套池化 → Linear(96,2) | 14k | 能 |
-| `head` | 预训练底座 | openWakeWord 冻结 mel+embedding → 小判断头 | 底座 2.4 MB | 不能（包太大） |
+| `head` | 预训练底座 | openWakeWord 冻结 mel+embedding → 小判断头 | 底座 2.4 MB | 可以（小包携带 OSS 底座清单） |
 
 `mlp` 仍留在 `trainer.train --model` 里复现早期实验，但页面不暴露。
 
