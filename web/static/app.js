@@ -464,6 +464,7 @@
         // 预置语料保留原名（含 `@`）：界面上只显示 `@` 之后那段，别把机器前缀露给孩子
         const shown = clip.name.includes("@")
           ? clip.name.slice(clip.name.indexOf("@") + 1) : clip.name;
+        const delBtn = `<button class="clip__del" type="button" title="删除这条" aria-label="删除">×</button>`;
         li.innerHTML = `
           <button class="clip__play" type="button" aria-label="试听">
             <svg viewBox="0 0 24 24" width="13" height="13" fill="currentColor"><path d="M8 5v14l11-7L8 5Z"/></svg>
