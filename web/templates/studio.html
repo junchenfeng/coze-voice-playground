@@ -1,0 +1,456 @@
+{% extends "base.html" %}
+{% block body_class %}page-studio{% endblock %}
+{% block title %}唤醒词训练台 · Nova Voice Lab{% endblock %}
+
+{% block content %}
+<div id="boot" hidden
+     data-active-run="{{ active.run_id if active else '' }}"
+     data-active-model="{{ active.model if active else '' }}"
+     data-step="{{ step }}"
+     data-min-pos="{{ min_pos }}" data-min-neg="{{ min_neg }}"
+     data-min-word-pos="{{ min_word_pos }}"
+     data-wake-word="{{ wake_word }}"></div>
+
+<header class="topbar glass">
+  <a class="brand brand--sm" href="/studio">
+    <span class="brand__mark" aria-hidden="true">
+      <svg viewBox="0 0 32 32" fill="none"><path d="M5 19c2.8-9 4.6 3 6.9-4s4.3 9 9.7-3" stroke="currentColor" stroke-width="2.2" stroke-linecap="round"/><circle cx="27" cy="20" r="2.4" fill="currentColor"/></svg>
+    </span>
+    <span class="brand__text"><strong>Nova Voice Lab</strong><small>唤醒词训练台</small></span>
+  </a>
+
+  <nav class="tabs rooms" id="rooms" aria-label="房间导航">
+    <button class="tab room" type="button" data-step="record">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3Z"/><path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/></svg>
+      {{ wake_word }} 录入
+    </button>
+    <button class="tab room" type="button" data-step="train">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 19V9"/><path d="M12 19V5"/><path d="M19 19v-6"/></svg>
+      教它
+    </button>
+    <button class="tab room" type="button" data-step="check">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M4 12a8 8 0 1 1 3 6.2"/><path d="M4 12v4h4"/></svg>
+      喊一声试试
+    </button>
+    <button class="tab room" type="button" data-step="word">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3.5 13.7 9l5.5 1.7-5.5 1.7L12 18l-1.7-5.6L4.8 10.7 10.3 9Z"/><path d="M18.5 15.5 19.3 18l2.5.8-2.5.8-.8 2.4-.8-2.4L15.2 19l2.5-.8Z"/></svg>
+      新唤醒词录入
+    </button>
+    <button class="tab room" type="button" data-step="models">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M12 3 20 7.6v8.8L12 21l-8-4.6V7.6L12 3Z"/><path d="M4 7.6 12 12l8-4.4"/><path d="M12 12v9"/></svg>
+      我的模型
+    </button>
+    <a class="tab" href="/notes" title="研究笔记">
+      <svg viewBox="0 0 24 24" width="16" height="16" fill="none" stroke="currentColor" stroke-width="1.8" aria-hidden="true"><path d="M5 4.5h11.5a2 2 0 0 1 2 2V20H7a2 2 0 0 1-2-2Z"/><path d="M8.5 8h7M8.5 11.5h7M8.5 15h4"/></svg>
+      研究笔记
+    </a>
+  </nav>
+
+  <div class="topbar__meta">
+    <span class="chip" id="chip-human" title="真人录音：当前数据集的正例 / 负例">人工（0/0）</span>
+    <span class="chip" id="chip-synth" title="合成语料：当前数据集的正例 / 负例（预置语料算合成）">合成（0/0）</span>
+    <span class="chip chip--model">模型 <b id="active-model">未应用</b></span>
+  </div>
+</header>
+
+<aside class="tipbar" id="tipbar" hidden>
+  <span class="tipbar__text" id="tip-text"></span>
+  <button class="btn btn--outline btn--sm" id="tip-go" type="button">去 →</button>
+  <button class="icon-btn icon-btn--sm" id="tip-close" type="button" aria-label="今天先不看">×</button>
+</aside>
+
+<main class="studio">
+  <!-- ============================ 默认唤醒词录入 ============================ -->
+  <section class="view" id="view-record" aria-label="{{ wake_word }} 录入">
+    <header class="lead">
+      <span class="lead__step" id="record-step">第 1 步 · 共 3 步</span>
+      <h1>[{{ wake_word }}] 录入</h1>
+      <p class="lead__sub" id="record-sub">让它记住你的声音</p>
+    </header>
+
+    <div class="stage-card glass">
+      <div class="stage-tabs" id="stage-tabs">
+        <button class="stage-tab" type="button" data-stage="pos">
+          <i class="stage-tab__dot"></i>在叫它
+          <span class="stage-tab__count"><b id="count-pos">0</b>/<span id="goal-pos">{{ min_pos }}</span></span>
+        </button>
+        <button class="stage-tab" type="button" data-stage="neg">
+          <i class="stage-tab__dot"></i>没在叫它
+          <span class="stage-tab__count"><b id="count-neg">0</b>/<span id="goal-neg">{{ min_neg }}</span></span>
+        </button>
+      </div>
+
+      <div class="record-stage" id="record-stage" data-stage="pos">
+        <div class="record-card" data-label="pos">
+          <p class="record-card__tip">对着麦克风清楚地说{{ wake_word }}</p>
+          <button class="record-btn" type="button" data-record="pos" aria-label="录制正样本">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+              <path d="M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3Z"/>
+              <path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/>
+            </svg>
+            <span>按下开始</span>
+          </button>
+          <canvas class="record-wave" data-wave="pos" height="64"></canvas>
+          <p class="record-status" data-status="pos">点一下麦克风，然后说「{{ wake_word }}」</p>
+        </div>
+
+        <div class="record-card" data-label="neg">
+          <p class="record-card__tip">说这五个词里的任意一个，别喊唤醒词</p>
+          <!-- 引导态由任务卡带着念（这里会隐藏），自由态照着点就行 -->
+          <ul class="neg-words" id="neg-words">
+            <li>hi buddy</li><li>hi 助手</li><li>小度小度</li><li>小爱小爱</li><li>我在举手</li>
+          </ul>
+          <button class="record-btn" type="button" data-record="neg" aria-label="录制负样本">
+            <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+              <path d="M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3Z"/>
+              <path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/>
+            </svg>
+            <span>按下开始</span>
+          </button>
+          <canvas class="record-wave" data-wave="neg" height="64"></canvas>
+          <p class="record-status" data-status="neg">点一下麦克风，随便挑一个说</p>
+        </div>
+      </div>
+
+      <p class="stage-note" id="stage-note">还差 4 条「在叫它」</p>
+
+      <button class="btn btn--primary btn--xl btn--block" id="record-next" type="button" disabled>下一步：教它 →</button>
+    </div>
+
+    <details class="adv">
+      <summary>进阶：我的录音 / 用电脑念</summary>
+      <div class="adv__body">
+        <div class="clip-groups">
+          <div>
+            <b class="clip-group__title">在叫它</b>
+            <ul class="clip-list" id="clips-pos"></ul>
+          </div>
+          <div>
+            <b class="clip-group__title">没在叫它</b>
+            <ul class="clip-list" id="clips-neg"></ul>
+          </div>
+        </div>
+
+        <section class="synth" aria-labelledby="synth-title">
+          <div class="synth__head">
+            <div>
+              <b id="synth-title">没有麦克风？用电脑念</b>
+              <p>服务器用合成音色念给你听。分数会偏乐观，最好再补几条真人录音。</p>
+            </div>
+            <span class="pill" id="synth-tag">豆包 TTS</span>
+          </div>
+          <div class="synth__ctl">
+            <label class="field">
+              <span>音色</span>
+              <select id="synth-voice"><option value="">读取中…</option></select>
+            </label>
+            <label class="field">
+              <span>在叫它</span>
+              <input id="synth-pos" type="number" min="0" max="6" value="3">
+            </label>
+            <label class="field">
+              <span>没在叫它</span>
+              <input id="synth-neg" type="number" min="0" max="6" value="3">
+            </label>
+            <button class="btn btn--outline" id="synth-go" type="button">生成到语料</button>
+          </div>
+          <p class="hint" id="synth-status">中文音色可以同时造两种；英文音色读不了「{{ wake_word }}」，只能造负样本。</p>
+        </section>
+      </div>
+    </details>
+  </section>
+
+  <!-- ============================ 教它 ============================ -->
+  <section class="view" id="view-train" aria-label="教它">
+    <header class="lead">
+      <span class="lead__step" id="train-step">第 2 步 · 共 3 步</span>
+      <h1>教它</h1>
+      <p class="lead__sub">它会把你录的声音看一遍，学 30 遍</p>
+    </header>
+
+    <div class="stage-card glass">
+      <div class="stage-pane" id="train-idle">
+        <p class="pane-note" id="train-idle-note">准备好了就按一下，大概 10 秒。</p>
+        <button class="btn btn--primary btn--xl btn--block" id="start-train" type="button">开始训练</button>
+        <p class="hint" id="train-idle-hint"></p>
+        <button class="link-btn" id="train-back" type="button">← 回去再多录几条</button>
+      </div>
+
+      <div class="stage-pane" id="train-running" hidden>
+        <p class="pane-title" id="progress-title">正在学第 1 遍</p>
+        <div class="bar"><i id="progress-bar"></i></div>
+        <p class="hint" id="progress-eta">马上就好</p>
+        <button class="btn btn--ghost btn--sm" id="btn-stop" type="button">先停下</button>
+      </div>
+
+      <div class="stage-pane" id="train-done" hidden>
+        <p class="score-label">它认对了</p>
+        <p class="score" id="score">--</p>
+        <p class="score-note" id="score-note">这是它训练时没见过的题</p>
+        <button class="btn btn--primary btn--xl btn--block" id="btn-again" type="button">再学一遍 →</button>
+        <button class="btn btn--ghost btn--sm" id="go-check" type="button">去喊一声试试</button>
+      </div>
+
+      <div class="stage-pane" id="train-failed" hidden>
+        <p class="pane-title">这次没学会</p>
+        <p class="hint">下面这段话给老师看，自己看不懂也没关系。</p>
+        <pre class="fail-log" id="fail-log"></pre>
+        <button class="btn btn--primary btn--xl btn--block" id="btn-again-fail" type="button">再教一遍</button>
+      </div>
+
+      <!-- 训练时/训完都在：曲线一边学一边长，训完留成这次的"成绩单" -->
+      <div class="result-card" id="result-card" hidden>
+        <div class="result-card__head">
+          <b id="result-model">CNN</b>
+          <span id="result-meta">正在学…</span>
+        </div>
+        <canvas id="stage-chart" height="180" role="img" aria-label="训练曲线"></canvas>
+        <div class="result-card__legend">
+          <span><i class="legend__line"></i>它练的</span>
+          <span><i class="legend__line legend__line--dash"></i>它考的</span>
+        </div>
+        <p class="result-card__when" id="result-when"></p>
+      </div>
+    </div>
+
+    <!-- 数据集：默认词 / 当前自定义词。放在进阶外面，学生一眼能看到"现在在教哪个词" -->
+    <div class="dataset-row">
+      <span class="dataset-row__label">数据集</span>
+      <div class="segmented segmented--sm" id="dataset-tabs" role="tablist" aria-label="训练数据集"></div>
+    </div>
+    <p class="hint" id="dataset-note">默认数据集：你录的「{{ wake_word }}」+ 预置语料。</p>
+
+    <details class="adv" id="train-adv">
+      <summary>进阶：曲线 / 换模型 / 参数 / 历史</summary>
+      <div class="adv__body">
+        <div class="model-grid" id="model-grid">
+          <label class="model-card">
+            <input type="radio" name="model" value="simple">
+            <b>简单 CNN</b><small>1 层卷积<br>约 3k 参数</small>
+          </label>
+          <label class="model-card is-active">
+            <input type="radio" name="model" value="cnn" checked>
+            <b>复杂 CNN</b><small>3 层卷积<br>推荐</small>
+          </label>
+          <label class="model-card">
+            <input type="radio" name="model" value="head">
+            <b>预训练底座</b><small>借来的耳朵<br>只训判断头</small>
+          </label>
+        </div>
+
+        <div class="param-grid">
+          <label class="field"><span>学习率</span>
+            <input id="lr" type="number" step="0.0001" min="0.00001" max="1" value="0.001"></label>
+          <label class="field"><span>batch</span>
+            <input id="batch" type="number" min="2" max="128" value="16"></label>
+          <label class="field"><span>epochs</span>
+            <input id="epochs" type="number" min="1" max="300" value="30"></label>
+        </div>
+
+        <div class="param-row">
+          <div class="param-row__head">
+            <b>训练数据集大小</b>
+            <span class="hint">真人录音只做考卷，合成语料用来训练；超出上限自动抽样。</span>
+          </div>
+          <div class="slider-grid">
+            <label class="slider">
+              <span>正例上限 <b id="max-pos-val">50</b></span>
+              <input id="max-pos" type="range" min="30" max="50" step="5" value="50">
+            </label>
+            <label class="slider">
+              <span>负例上限 <b id="max-neg-val">300</b></span>
+              <input id="max-neg" type="range" min="100" max="300" step="10" value="300">
+            </label>
+          </div>
+        </div>
+
+        <label class="check">
+          <input id="use-builtin" type="checkbox" checked>
+          <span>带上预置语料<b id="builtin-count"></b>（存在 OSS，首次训练前自动下载）</span>
+        </label>
+
+        <div class="chart-toolbar">
+          <div class="segmented segmented--sm" id="chart-mode" role="tablist" aria-label="曲线指标">
+            <button type="button" data-mode="loss" class="is-active">Loss</button>
+            <button type="button" data-mode="acc">Accuracy</button>
+          </div>
+          <span class="legend">
+            <i class="legend__line"></i>train
+            <i class="legend__line legend__line--dash"></i>val
+          </span>
+        </div>
+
+        <div class="chart-wrap">
+          <canvas id="chart" height="300" role="img" aria-label="训练曲线"></canvas>
+          <div class="chart-empty" id="chart-empty">还没有曲线，先跑一次训练</div>
+        </div>
+
+        <div class="metric-row">
+          <div><span>val_acc</span><b id="metric-val">--</b></div>
+          <div><span>train_acc</span><b id="metric-train">--</b></div>
+          <div><span>参数量</span><b id="metric-params">--</b></div>
+          <div><span>耗时</span><b id="metric-time">--</b></div>
+        </div>
+
+        <details class="log" id="log-box">
+          <summary>训练日志</summary>
+          <pre id="run-log">—</pre>
+        </details>
+
+        <div class="runs-head">
+          <b>历史运行</b>
+          <button class="btn btn--ghost btn--sm" id="refresh-runs" type="button">刷新</button>
+        </div>
+        <ul class="run-list" id="run-list">
+          <li class="run-list__empty">还没有运行记录</li>
+        </ul>
+
+        <div class="run-actions">
+          <button class="btn btn--ghost btn--sm" id="btn-rerun" type="button" disabled
+                  title="模型与训练数据集大小按上面的选择，其余沿用这次运行">用当前模型再训</button>
+          <button class="btn btn--outline btn--sm" id="btn-apply" type="button" disabled>用这个模型</button>
+          <button class="btn btn--outline btn--sm" id="btn-deploy" type="button" disabled>部署到桌宠</button>
+        </div>
+        <p class="hint" id="deploy-hint" hidden></p>
+      </div>
+    </details>
+  </section>
+
+  <!-- ============================ 新唤醒词录入 ============================ -->
+  <section class="view" id="view-word" aria-label="新唤醒词录入">
+    <header class="lead">
+      <span class="lead__step">可选 · 自己定一个唤醒词</span>
+      <h1>新唤醒词录入</h1>
+      <p class="lead__sub" id="word-sub">录一次，只留一个词</p>
+    </header>
+
+    <div class="stage-card glass">
+      <div class="wordhead">
+        <div>
+          <span class="wordhead__label">当前唤醒词</span>
+          <b class="wordhead__text" id="word-current">还没有</b>
+        </div>
+        <button class="btn btn--ghost btn--sm" id="word-switch" type="button" hidden>换一个</button>
+      </div>
+      <p class="hint" id="word-switch-note" hidden>
+        换词只改界面显示：旧词的录音仍留在服务器上，历史模型也还能用。
+      </p>
+
+      <ol class="wsteps">
+        <li class="wstep" data-wstep="1">
+          <b><i>1</i>想一个唤醒词</b>
+          <div class="wstep__row">
+            <input id="word-text" type="text" maxlength="24" placeholder="例如：小福小福 / hi nova">
+            <button class="btn btn--primary btn--sm" id="word-save" type="button">用它</button>
+          </div>
+          <p class="hint" id="word-hint">1~4 个字最好念；中英混排也行。</p>
+        </li>
+
+        <li class="wstep" data-wstep="2" hidden>
+          <b><i>2</i>生成合成训练语料</b>
+          <div class="wstep__row wstep__row--between">
+            <button class="btn btn--outline btn--sm" id="word-synth" type="button">生成合成训练语料</button>
+            <span class="wstep__meta" id="word-synth-meta">约 30 条 · 15 个音色</span>
+          </div>
+          <div class="bar bar--word" id="word-synth-box" hidden><i id="word-synth-bar"></i></div>
+          <p class="hint" id="word-synth-status">自动用不同音色各念 2 遍，不用你挑音色。</p>
+        </li>
+
+        <li class="wstep" data-wstep="3" hidden>
+          <b><i>3</i>自己喊 <span id="word-goal-title">{{ min_word_pos }}</span> 条</b>
+          <div class="wstep__row wstep__row--record">
+            <button class="record-btn record-btn--sm" id="word-record" type="button" aria-label="录一条正例">
+              <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+                <path d="M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3Z"/>
+                <path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/>
+              </svg>
+              <span>按下开始</span>
+            </button>
+            <span class="wordcard__count"><b id="word-count">0</b>/<span id="word-goal">{{ min_word_pos }}</span></span>
+          </div>
+          <canvas class="record-wave record-wave--word" id="word-wave" height="56"></canvas>
+          <ol class="taskcard__dots" id="word-dots"></ol>
+          <p class="record-status" id="word-record-status">点一下，然后喊这个词</p>
+        </li>
+
+        <li class="wstep" data-wstep="4" hidden>
+          <button class="btn btn--primary btn--block" id="word-goto-train" type="button">去教它（用这个词）→</button>
+          <p class="hint" id="word-train-hint"></p>
+        </li>
+      </ol>
+
+      <div class="wordcard__list-head">
+        <b>我的录音</b>
+        <span class="hint" id="word-list-hint">正例只存在这个词的目录里，负例来自本地录音 + 预置语料</span>
+      </div>
+      <ul class="clip-list" id="word-clips">
+        <li class="clip clip--empty">还没有录音</li>
+      </ul>
+    </div>
+  </section>
+
+  <!-- ============================ 喊一声试试 ============================ -->
+  <section class="view" id="view-check" aria-label="喊一声试试">
+    <header class="lead">
+      <span class="lead__step" id="check-step">第 3 步 · 共 3 步</span>
+      <h1>喊一声试试</h1>
+      <p class="lead__sub" id="check-sub">点一下麦克风，然后喊「{{ check_word }}」</p>
+    </header>
+
+    <div class="stage-card glass">
+      <div class="mic-stage" id="mic-stage">
+        <div class="mic-rings" aria-hidden="true"><span></span><span></span><span></span></div>
+        <button class="mic" id="mic-btn" type="button" aria-label="开始聆听">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true">
+            <path d="M12 3a3 3 0 0 1 3 3v5a3 3 0 0 1-6 0V6a3 3 0 0 1 3-3Z"/>
+            <path d="M5 11a7 7 0 0 0 14 0"/><path d="M12 18v3"/>
+          </svg>
+        </button>
+        <p class="mic-status" id="mic-status">待机 · 点一下开始</p>
+        <canvas class="test-wave" id="test-wave" height="90" aria-hidden="true"></canvas>
+      </div>
+
+      <div class="check-actions">
+        <button class="btn btn--ghost btn--sm" id="check-retry" type="button">再来一次</button>
+        <button class="btn btn--ghost btn--sm" id="check-retrain" type="button">它还没学会，再教一遍</button>
+      </div>
+    </div>
+
+    <details class="adv">
+      <summary>进阶：换模型 / 阈值 / 命中记录</summary>
+      <div class="adv__body">
+        <label class="field">
+          <span>现在用哪个模型</span>
+          <select id="model-switch"><option value="">还没有可用的模型</option></select>
+        </label>
+        <label class="slider">
+          <span>判定阈值 <b id="threshold-val">0.70</b></span>
+          <input id="threshold" type="range" min="0.30" max="0.99" step="0.01" value="0.70">
+        </label>
+        <div class="hits" id="hits">
+          <span class="hits__empty">最近命中会显示在这里</span>
+        </div>
+      </div>
+    </details>
+  </section>
+
+  <!-- ============================ 我的模型 ============================ -->
+  <section class="view" id="view-models" aria-label="我的模型">
+    <header class="lead">
+      <span class="lead__step">只列这台机器训过的模型</span>
+      <h1>我的模型</h1>
+      <p class="lead__sub">训好的都在这里：点「使用」让它上岗，点「为桌宠下载」装到桌面小伙伴身上</p>
+    </header>
+
+    <div class="model-deck" id="model-deck">
+      <p class="model-deck__empty">还没有训好的模型，先去「教它」训一版</p>
+    </div>
+  </section>
+</main>
+{% endblock %}
+
+{% block scripts %}
+<script src="/static/charts.js" defer></script>
+<script src="/static/recorder.js" defer></script>
+<script src="/static/app.js" defer></script>
+{% endblock %}

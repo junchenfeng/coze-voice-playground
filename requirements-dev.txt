@@ -1,0 +1,4 @@
+-r requirements.txt
+# 只在本地/CI 用，不进运行时镜像
+pytest==8.3.4
+httpx==0.28.1

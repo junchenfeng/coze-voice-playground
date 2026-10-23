@@ -1,57 +1,18 @@
 [project]
-requires = [ "nodejs-24" ]
+requires = [ "python-3.12", "nodejs-24" ]
 project_type = "web"
-template = "vite"
-version = "0.1.8"
+version = "0.1.0"
 appliedPatches = [ ]
 
+# nodejs 不是给业务用的：coze-daemon 会在 runtime shell 退出时清理原进程组，
+# dev.sh 借 node 的 detached spawn 把 uvicorn 挪进独立 session（与参考项目一致）。
 [dev]
 build = [ "bash", "./scripts/prepare.sh" ]
-build_win = [
-  "powershell.exe",
-  "-NoProfile",
-  "-ExecutionPolicy",
-  "Bypass",
-  "-File",
-  "./scripts/prepare.ps1"
-]
 run = [ "bash", "./scripts/dev.sh" ]
-run_win = [
-  "powershell.exe",
-  "-NoProfile",
-  "-ExecutionPolicy",
-  "Bypass",
-  "-File",
-  "./scripts/dev.ps1"
-]
 validate = [ "bash", "./scripts/validate.sh" ]
-validate_win = [
-  "powershell.exe",
-  "-NoProfile",
-  "-ExecutionPolicy",
-  "Bypass",
-  "-File",
-  "./scripts/validate.ps1"
-]
 deps = [ "git" ]
 
 [deploy]
 build = [ "bash", "./scripts/build.sh" ]
-build_win = [
-  "powershell.exe",
-  "-NoProfile",
-  "-ExecutionPolicy",
-  "Bypass",
-  "-File",
-  "./scripts/build.ps1"
-]
 run = [ "bash", "./scripts/start.sh" ]
-run_win = [
-  "powershell.exe",
-  "-NoProfile",
-  "-ExecutionPolicy",
-  "Bypass",
-  "-File",
-  "./scripts/start.ps1"
-]
 deps = [ "git" ]
