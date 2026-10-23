@@ -286,6 +286,12 @@ def list_runs() -> list[dict]:
             "elapsed_s": result.get("elapsed_s"),
             "params_total": result.get("params_total"),
             "final": result.get("final"),
+            # 模型卡上要回报「训练集 / 考卷多大」：n_train / n_val 是窗口数，
+            # n_clips 是原始录音条数，human_split 是真人进训练/当考卷的分堆。
+            "n_train": result.get("n_train"),
+            "n_val": result.get("n_val"),
+            "n_clips": result.get("n_clips"),
+            "human_split": result.get("human_split"),
             "active": path.name == active,
             # 「这次运行算不算一个能用的模型」的唯一判据：真有权重文件
             "has_ckpt": (path / "model.pt").is_file(),

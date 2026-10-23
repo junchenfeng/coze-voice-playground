@@ -24,9 +24,14 @@ WORD_PREFIX = "word/"
 # 合成片段的名字里一律带 `-synth-`（共享池 / 词目录 / 内置语料同一套规则），
 # 训练侧据此区分"真人录音"与"TTS 合成"：真人只做考卷，训练集只用合成。
 SYNTH_MARK = "-synth-"
-# 训练装载上限：合成数据可能很多，超过就按固定种子抽样（真人优先占名额）。
+# 训练装载上限：默认 50/150 = 真人 30/50 + 合成 20/100（上限是训练集总条数）。
 MAX_POS_CLIPS = 50
-MAX_NEG_CLIPS = 300
+MAX_NEG_CLIPS = 150
+# 真人录音的分配：每类抽这么多条进训练集，其余固定当考卷。
+# 为什么不再"真人全部只做考卷"：那样模型一条真人声音都没见过，线上尽是过拟合到
+# 合成音色的误唤醒；留一批真人考卷是为了"没见过的人/口音"这一条指标还可信。
+HUMAN_TRAIN_POS = 30
+HUMAN_TRAIN_NEG = 50
 
 
 def is_synth(name: str) -> bool:
@@ -204,7 +209,7 @@ def _cache_write(model, label, sha, ok, x=None, t=None):
 
 def load_dataset(root, extra_roots=(), model="mlp", expand=True, pos_dir=None,
                  max_pos=MAX_POS_CLIPS, max_neg=MAX_NEG_CLIPS, sample_seed=0,
-                 stats=None):
+                 stats=None, human_train=(HUMAN_TRAIN_POS, HUMAN_TRAIN_NEG)):
     """root/{pos,neg}/*.wav + 可选 meta.json → (X, y, t, files, groups, meta)
 
     - y 是硬标签（0/1），只用来分层切考卷；
@@ -219,13 +224,18 @@ def load_dataset(root, extra_roots=(), model="mlp", expand=True, pos_dir=None,
     按负例切窗——老唤醒词的正例对新词来说不是正例，而是最像的难负例（不给它
     标负，新模型照样会被老唤醒词叫醒）。缺省 None 时行为与以前完全一致。
 
-    max_pos / max_neg 是每个类别的**条数上限**（不是窗口数）：合成语料多起来以后
-    训练会越跑越慢，超过上限就在读 wav 之前按条抽样。真人录音优先占名额（全留），
-    名额不够时才从合成片段里按 sample_seed 固定随机抽——同一份语料、同一个种子
-    每次都抽到同一批，rerun 与 split 缓存都稳定。
+    max_pos / max_neg 是每个类别的**条数上限**（不是窗口数，真人 + 合成合计）：
+    训练会越跑越慢，超过上限就在读 wav 之前按条抽样。抽样先把 human_train 的
+    真人配额给满，剩下的名额才给合成音——上限缩小时缩的是合成音，真人一条不减。
+    默认 50/150 正好是真人 30/50 + 合成 20/100。同一份语料、同一个种子每次都
+    抽到同一批，rerun 与 split 缓存都稳定。
 
-    stats 传一个 dict 进来，会写入抽样明细（before/after/limit/human/synth）与
-    `human_groups`（真人录音的文件名集合，给 make_split(split_by="human") 用）。
+    human_train=(正例条数, 负例条数)：每类从真人录音里划这么多条进训练集，其余
+    全部固定当考卷（见 stats["val_groups"]）。传 (0, 0) = 老口径（真人只做考卷）。
+
+    stats 传一个 dict 进来，会写入抽样明细（before/after/limit/human/synth）、
+    `human_split`（训练/考卷各多少条）与 `human_groups`（真人录音的文件名集合，
+    给 make_split(split_by="human") 用）。
 
     特征按「录音内容 sha256 + 模型 + 软标签口径」落盘缓存（.cache/features），
     第二次装载同一份语料直接读缓存——head 的 ONNX 特征尤其受益；目录可随时
@@ -283,46 +293,86 @@ def load_dataset(root, extra_roots=(), model="mlp", expand=True, pos_dir=None,
             rel = os.path.relpath(p, base)
             entries.append((len(entries), label, p, prefix + rel, base, rel))
 
-    def _sample(rows, cap, key):
-        """每类按条抽样：真人全留，名额不够才抽合成；真人自己超上限才截断。"""
+    # 真人按类切成两堆：human_train 条进训练集，其余固定当考卷。考卷不进抽样、
+    # 也不随页面上限变化——同一批人、同一批录音，val_acc 才有可比性。
+    train_ids: set[int] = set()
+    val_names: list[str] = []
+    human_split = {"train": {0: 0, 1: 0}, "val": {0: 0, 1: 0}}
+    for lab, quota in ((1, int(human_train[0])), (0, int(human_train[1]))):
+        pool = sorted(e for e in entries if e[1] == lab and not is_synth(e[3]))
+        if not pool:
+            continue
+        # 配额没装满就整类进训练（真人少的时候没有"剩余的"可当考卷，
+        # 由 make_split 回落随机 12%——否则小语料会连训练集都空掉）
+        n_train = min(max(0, quota), len(pool))
+        rng = np.random.default_rng(sample_seed)
+        picked = (set(rng.choice(len(pool), size=n_train, replace=False).tolist())
+                  if n_train else set())
+        for i, e in enumerate(pool):
+            if i in picked:
+                train_ids.add(e[0])
+                human_split["train"][lab] += 1
+            else:
+                val_names.append(e[3])
+                human_split["val"][lab] += 1
+    stats["val_groups"] = sorted(val_names)
+    stats["human_split"] = human_split
+
+    def _sample(rows, cap, key, want_human):
+        """每类按条抽样：真人先占配额，剩下的名额给合成；名额不够才缩真人。"""
         cap = max(1, int(cap))            # 0 / 负数没有意义，至少留一条
         if not rows:
-            stats[key] = {"before": 0, "after": 0, "limit": cap, "human": 0, "synth": 0}
+            stats[key] = {"before": 0, "after": 0, "limit": cap, "human": 0,
+                          "synth": 0, "human_room": int(want_human)}
             return rows
         human = [e for e in rows if not is_synth(e[3])]
         synth = sorted((e for e in rows if is_synth(e[3])), key=lambda e: e[3])
         if len(rows) <= cap:
             kept = rows
         else:
-            if len(human) >= cap:
-                rng = np.random.default_rng(sample_seed)
-                idx = set(rng.choice(len(human), size=cap, replace=False).tolist())
-                kept_human = [e for i, e in enumerate(human) if i in idx]
-            else:
-                kept_human = human
-            room = cap - len(kept_human)
-            if room > 0 and synth:
-                rng = np.random.default_rng(sample_seed)
-                idx = set(rng.choice(len(synth), size=min(room, len(synth)),
-                                     replace=False).tolist())
-                kept = kept_human + [e for i, e in enumerate(synth) if i in idx]
-            else:
-                kept = kept_human
+            keep_h = min(len(human), max(0, int(want_human)))
+            keep_s = min(len(synth), cap - keep_h)
+            keep_h = min(len(human), cap - keep_s)     # 合成不够就把名额还给真人
+            rng = np.random.default_rng(sample_seed)
+            idx_h = (set(rng.choice(len(human), size=keep_h, replace=False).tolist())
+                     if keep_h else set())
+            idx_s = (set(rng.choice(len(synth), size=keep_s, replace=False).tolist())
+                     if keep_s else set())
+            kept = ([e for i, e in enumerate(human) if i in idx_h]
+                    + [e for i, e in enumerate(synth) if i in idx_s])
             kept.sort(key=lambda e: e[0])          # 保持原来的语料顺序，窗口顺序稳定
         stats[key] = {"before": len(rows), "after": len(kept), "limit": cap,
                       "human": sum(1 for e in kept if not is_synth(e[3])),
-                      "synth": sum(1 for e in kept if is_synth(e[3]))}
+                      "synth": sum(1 for e in kept if is_synth(e[3])),
+                      "human_room": int(want_human)}
         return kept
 
-    pos_rows = _sample([e for e in entries if e[1] == 1], int(max_pos), "pos")
-    neg_rows = _sample([e for e in entries if e[1] == 0], int(max_neg), "neg")
-    kept_entries = sorted(pos_rows + neg_rows, key=lambda e: e[0])
-    stats["human_groups"] = sorted({e[3] for e in kept_entries if not is_synth(e[3])})
+    # 真人占多少名额：配额内固定给满（正例 30 / 负例 50），剩下的名额才给合成音。
+    # 滑杆缩小时缩的是"合成音的名额"，真人一条都不减——真人样本本来就少，
+    # 把滑杆调小再顺手减真人，只会让模型更贴着合成音色过拟合。
+    want_pos = min(int(max_pos), int(human_train[0]))
+    want_neg = min(int(max_neg), int(human_train[1]))
+    pos_rows = _sample([e for e in entries
+                        if e[1] == 1 and (is_synth(e[3]) or e[0] in train_ids)],
+                       int(max_pos), "pos", want_pos)
+    neg_rows = _sample([e for e in entries
+                        if e[1] == 0 and (is_synth(e[3]) or e[0] in train_ids)],
+                       int(max_neg), "neg", want_neg)
+    # 考卷那批真人也要载进来（否则 val 集里根本没有它们，切分会回落随机抽样）：
+    # 它们不占 max_pos / max_neg 的名额，是"额外的固定考卷"。
+    val_names_set = set(val_names)
+    val_entries = [e for e in entries if e[3] in val_names_set]
+    kept_entries = sorted(pos_rows + neg_rows + val_entries, key=lambda e: e[0])
+    stats["human_groups"] = sorted(
+        {e[3] for e in kept_entries if not is_synth(e[3])} | set(val_names))
+    print(f"[data] 真人切分：正例 训练 {human_split['train'][1]} / 考卷 "
+          f"{human_split['val'][1]} 条，负例 训练 {human_split['train'][0]} / 考卷 "
+          f"{human_split['val'][0]} 条")
     for key, zh in (("pos", "正例"), ("neg", "负例")):
         row = stats[key]
         if row["before"] > row["after"]:
             print(f"[data] 抽样：{zh} {row['before']}→{row['after']}"
-                  f"（真人 {row['human']} 条保留、合成保留 {row['synth']} 条，"
+                  f"（训练集里真人 {row['human']} 条 / 合成 {row['synth']} 条，"
                   f"上限 {row['limit']}）")
 
     for _idx, label, p, name, base, rel in kept_entries:
@@ -382,20 +432,27 @@ def load_dataset(root, extra_roots=(), model="mlp", expand=True, pos_dir=None,
 
 
 def make_split(labels, files, meta=None, val_ratio=0.12, seed=42, out=None,
-               split_by="clip", groups=None, human_groups=None):
+               split_by="clip", groups=None, human_groups=None, val_groups=None):
     """切考卷；结果落盘，保证三个模型考同一张卷。
 
     split_by="clip"    随机抽条（同一个人的其它录音仍可能在训练里）
     split_by="speaker" 留出若干"人"，他们一条都不参与训练（真·没见过的题）
-    split_by="human"   真人录音全部当考卷、训练集只用合成片段；某类没有可用真人
-                       或这样会让该类训练侧空掉时，该类别回落 clip 随机 12%
+    split_by="human"   两种口径：
+       ① 传了 val_groups（load_dataset 已按配额切好的真人考卷）→ 原样采用，
+          某一类没有真人考卷时才回落 clip 随机 12%；
+       ② 没传（老口径）→ 真人录音全部当考卷、训练集只用合成片段。
 
     groups 是窗口所属的原始录音：同一段录音的窗口必须整组进同一侧。
     """
     groups = list(groups) if groups is not None else list(files)
     human = set(human_groups or ())
+    group_set = set(groups)
+    given_val = [g for g in (val_groups or ()) if g in group_set]
     fingerprint = {"split_by": split_by, "val_ratio": val_ratio, "seed": seed,
                    "human_n": len(human)}
+    if given_val:                    # 固定考卷换了人就必须重切，缓存不能命中
+        fingerprint["holdout"] = hashlib.sha1(
+            "\n".join(sorted(given_val)).encode("utf-8")).hexdigest()[:16]
     if out and os.path.exists(out) and os.path.exists(out + ".by"):
         try:
             cached = json.loads(open(out + ".by", encoding="utf-8").read())
@@ -412,37 +469,43 @@ def make_split(labels, files, meta=None, val_ratio=0.12, seed=42, out=None,
     g_label = {}
     for g, lab in zip(groups, labels):
         g_label[g] = int(lab)
-    val_groups: set[str] = set()
+    val_set: set[str] = set()
     if split_by == "speaker" and meta:
         speakers = sorted({meta[g]["speaker"] for g in g_label if g in meta})
         n_hold = max(1, int(round(len(speakers) * val_ratio)))
         held = set(rng.choice(speakers, size=n_hold, replace=False).tolist())
-        val_groups = {g for g in g_label if meta.get(g, {}).get("speaker") in held}
+        val_set = {g for g in g_label if meta.get(g, {}).get("speaker") in held}
     elif split_by == "human":
+        val_set = set(given_val)
         for lab in (0, 1):
             pool = sorted(g for g, v in g_label.items() if v == lab)
-            if not pool:
+            if not pool or any(g in val_set for g in pool):
+                continue                      # 这一类已经有真人的固定考卷
+            k = max(1, int(round(len(pool) * val_ratio)))
+            if given_val:
+                # 新口径：真人考卷在装载时切好了，这一类没有（真人太少/全合成）
+                val_set.update(rng.choice(pool, size=min(k, len(pool)),
+                                          replace=False).tolist())
+                print(f"[data] split: 类别 {lab} 没有真人考卷，回落随机 {val_ratio:.0%}")
                 continue
             mine = [g for g in pool if g in human]
             if mine and len(mine) < len(pool):
-                val_groups.update(mine)          # 真人全进考卷，合成全留训练
+                val_set.update(mine)          # 老口径：真人全进考卷，合成全留训练
                 continue
             # 该类没有真人（或全是真人）：回落随机抽，保证训练侧不空
-            k = max(1, int(round(len(pool) * val_ratio)))
-            val_groups.update(rng.choice(pool, size=min(k, len(pool)),
-                                         replace=False).tolist())
+            val_set.update(rng.choice(pool, size=min(k, len(pool)),
+                                      replace=False).tolist())
             print(f"[data] split: 类别 {lab} 没有可用的真人考卷，回落随机 {val_ratio:.0%}")
     else:
         for lab in (0, 1):
             pool = sorted(g for g, v in g_label.items() if v == lab)
             k = max(1, int(round(len(pool) * val_ratio)))
-            val_groups.update(rng.choice(pool, size=min(k, len(pool)), replace=False).tolist())
+            val_set.update(rng.choice(pool, size=min(k, len(pool)), replace=False).tolist())
 
-    val = np.array([i for i, g in enumerate(groups) if g in val_groups], dtype=np.int64)
+    val = np.array([i for i, g in enumerate(groups) if g in val_set], dtype=np.int64)
 
     if out:
         os.makedirs(os.path.dirname(out) or ".", exist_ok=True)
-        val_set = set(val_groups)
         with open(out, "w", encoding="utf-8") as f:
             json.dump({"val": [files[i] for i in val],
                        "train": [f for i, f in enumerate(files) if groups[i] not in val_set],

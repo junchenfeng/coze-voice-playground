@@ -301,6 +301,66 @@ def test_rerun_copies_config_but_new_init_seed(client, wav_bytes, monkeypatch):
     assert captured["init_seed"] != 7        # 换个起点，别训出逐位相同的模型
 
 
+def test_rerun_honors_page_params_and_drops_legacy_clip(client, wav_bytes, monkeypatch):
+    """epochs/batch/lr 按页面走，考卷口径一律 human。
+
+    以前重跑照抄旧 run：把 epochs 从 5 改成 50 再点「再学一遍」还是只学 5 遍；
+    老 run 的 `clip` 随机考卷也会被继承——同一段录音的窗口同时进训练和考卷，
+    val_acc 虚高。
+    """
+    seed_corpus(client, wav_bytes, "pos", n=4)
+    seed_corpus(client, wav_bytes, "neg", n=4)
+    original = make_run()
+    cfg_path = store.run_dir(original) / "config.json"
+    cfg = json.loads(cfg_path.read_text(encoding="utf-8"))
+    cfg.update({"epochs": 5, "batch": 4, "lr": 0.001, "split_by": "clip"})
+    cfg_path.write_text(json.dumps(cfg), encoding="utf-8")
+
+    captured = {}
+
+    def fake_start(config):
+        captured.update(config)
+        return make_run(model=config["model"], status="running", with_ckpt=False)
+
+    monkeypatch.setattr(jobs, "start", fake_start)
+    res = client.post(f"/api/runs/{original}/rerun",
+                      json={"epochs": 50, "batch": 16, "lr": 5e-4})
+    assert res.status_code == 200, res.text
+    assert captured["epochs"] == 50 and captured["batch"] == 16
+    assert captured["lr"] == pytest.approx(5e-4)
+    assert captured["split_by"] == "human"          # 不再照抄 clip
+    assert captured["seed"] == 1                     # 考卷种子照抄
+    assert captured["val_ratio"] == pytest.approx(0.2)
+
+    # 非法 epochs 别落进训练
+    assert client.post(f"/api/runs/{original}/rerun", json={"epochs": 0}).status_code == 400
+
+
+def test_runs_list_reports_dataset_sizes(client):
+    """模型卡要回报「训练集 / 考卷多大」：/api/runs 必须带 n_train / n_val / human_split。"""
+    run_id = make_run(result={
+        "final": {"train_acc": 1.0, "val_acc": 1.0, "gap": 0.0},
+        "elapsed_s": 1.5, "params_total": 1234,
+        "n_train": 1000, "n_val": 300, "n_clips": 200,
+        "human_split": {"train": {"0": 50, "1": 30}, "val": {"0": 60, "1": 49}},
+    })
+    run = next(r for r in client.get("/api/runs").json()["runs"] if r["id"] == run_id)
+    assert run["n_train"] == 1000 and run["n_val"] == 300 and run["n_clips"] == 200
+    assert run["human_split"]["val"] == {"0": 60, "1": 49}
+
+
+def test_static_assets_are_cache_busted(client):
+    """改完前端必须立即生效：模板挂 `?v=mtime`，静态资源一律回源校验。"""
+    page = client.get("/studio")
+    assert page.status_code == 200
+    assert "/static/app.js?v=" in page.text
+    assert "/static/style.css?v=" in page.text
+
+    res = client.get("/static/app.js")
+    assert res.status_code == 200
+    assert "no-cache" in res.headers.get("cache-control", "")
+
+
 def test_rerun_rejects_unknown_model(client):
     run_id = make_run()
     assert client.post(f"/api/runs/{run_id}/rerun", json={"model": "x"}).status_code == 400

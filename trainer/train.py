@@ -23,7 +23,8 @@ import torch
 import torch.nn.functional as F
 from torch.utils.data import DataLoader, TensorDataset
 
-from .data import MAX_NEG_CLIPS, MAX_POS_CLIPS, load_dataset, make_split
+from .data import (HUMAN_TRAIN_NEG, HUMAN_TRAIN_POS, MAX_NEG_CLIPS, MAX_POS_CLIPS,
+                   load_dataset, make_split)
 from .models import build, count_params
 
 
@@ -91,14 +92,20 @@ def main():
     ap.add_argument("--val-ratio", type=float, default=0.12)
     ap.add_argument("--split-by", default="clip", choices=["clip", "speaker", "human"],
                     help="clip=随机抽条；speaker=留出几个人当考卷；"
-                         "human=真人录音全做考卷、训练集只用合成（某类无真人时回落 clip）")
+                         "human=训练时留出的真人录音当考卷（某类无真人时回落 clip）")
     ap.add_argument("--seed", type=int, default=42,
                     help="切考卷用的种子：同一个 seed + 同一份语料 = 同一张卷")
-    # 训练装载上限（页面上「训练数据集大小」两个滑杆）：超出按条抽样，真人优先占名额
+    # 训练装载上限（页面上「训练数据集大小」两个滑杆）：上限是总条数，真人先占配额
     ap.add_argument("--max-pos", type=int, default=MAX_POS_CLIPS,
                     help=f"正例最多多少条（默认 {MAX_POS_CLIPS}）")
     ap.add_argument("--max-neg", type=int, default=MAX_NEG_CLIPS,
                     help=f"负例最多多少条（默认 {MAX_NEG_CLIPS}）")
+    # 真人录音的分配：每类抽出这么多条进训练集，其余固定当考卷（默认 30 / 50）。
+    # 传 0 = 老口径（真人全部只做考卷）。
+    ap.add_argument("--human-train-pos", type=int, default=HUMAN_TRAIN_POS,
+                    help=f"真人正例进训练集的条数（默认 {HUMAN_TRAIN_POS}）")
+    ap.add_argument("--human-train-neg", type=int, default=HUMAN_TRAIN_NEG,
+                    help=f"真人负例进训练集的条数（默认 {HUMAN_TRAIN_NEG}）")
     # 初始化/打乱顺序用的种子。默认跟 --seed 一致（CLI 行为不变）；
     # web 的"再学一遍"会给一个新的 init-seed：考卷不动，但模型从头换个起点，
     # 否则同数据同 seed 训两遍结果一模一样，看起来像"没重新训练"。
@@ -149,18 +156,24 @@ def main():
     stats: dict = {}
     X, y, target, files, groups, meta = load_dataset(
         args.data, extra_roots, model=args.model,
-        pos_dir=args.pos_dir, max_pos=args.max_pos, max_neg=args.max_neg, stats=stats)
+        pos_dir=args.pos_dir, max_pos=args.max_pos, max_neg=args.max_neg, stats=stats,
+        human_train=(args.human_train_pos, args.human_train_neg))
     builtin_prefix = (os.path.basename(os.path.normpath(builtin_dir)) + "/") if builtin_dir else ""
 
     split_path = args.split_json or os.path.join(args.data, f"split-{args.split_by}.json")
     os.makedirs(os.path.dirname(split_path) or ".", exist_ok=True)
     human_groups = stats.get("human_groups") or []
+    holdout = stats.get("val_groups") or []      # 装载时切好的真人考卷（固定不变）
     val_idx = make_split(y, files, meta, args.val_ratio, args.seed,
                          out=split_path, split_by=args.split_by, groups=groups,
-                         human_groups=human_groups)
+                         human_groups=human_groups, val_groups=holdout)
     if args.split_by == "human":
-        print(f"[data] split: 真人录音 {len(human_groups)} 条只做考卷"
-              + ("" if human_groups else "（没有真人录音，回落随机 12%）"))
+        hs = stats.get("human_split") or {"train": {}, "val": {}}
+        tr, va = hs["train"], hs["val"]
+        print(f"[data] split: 考卷 {len(holdout)} 条真人（正 {va.get(1, 0)} / "
+              f"负 {va.get(0, 0)}），训练集里的真人 正 {tr.get(1, 0)} / "
+              f"负 {tr.get(0, 0)}"
+              + ("" if holdout else "（没有真人考卷，回落随机 12%）"))
 
     progress_fp = None
     if args.progress_jsonl:
@@ -247,13 +260,17 @@ def main():
         "wake_word": args.wake_word,
         # 装载口径：正/负各最多多少条、抽样前后多少条、真人是否存在
         "sampled": {key: stats.get(key) for key in ("pos", "neg")},
-        "val_source": ("human" if args.split_by == "human" and human_groups
+        "human_split": stats.get("human_split"),
+        "val_source": ("human" if args.split_by == "human" and holdout
                        else args.split_by),
         "n_builtin": sum(1 for f in files if builtin_prefix and f.startswith(builtin_prefix)),
         "elapsed_s": round(time.time() - t0, 2),
         "avg_epoch_s": round(sum(h["epoch_s"] for h in history) / max(1, len(history)), 2),
         "final": {"train_acc": history[-1]["train_acc"],
                   "val_acc": history[-1]["val_acc"],
+                  # 训练过程中的主指标是 loss：页面实时卡与曲线都读这两个字段
+                  "train_loss": history[-1]["train_loss"],
+                  "val_loss": history[-1]["val_loss"],
                   "gap": round(history[-1]["train_acc"] - history[-1]["val_acc"], 4)},
         "history": history,
     }
