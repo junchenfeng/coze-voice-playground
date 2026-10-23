@@ -169,6 +169,9 @@
   }
 
   const pct = (v) => (Number.isFinite(v) ? `${Math.round(v * 100)}%` : "--");
+  // 训练过程中的主指标是 loss（越小越好）：4 位有效小数太长，统一 3 位
+  const fmtLoss = (v) => (Number.isFinite(v) ? Number(v).toFixed(3) : "--");
+  const fmtCount = (v) => (Number.isFinite(v) ? Number(v).toLocaleString("zh-CN") : "--");
   const esc = (s) => String(s == null ? "" : s).replace(/[<>&"]/g,
     (c) => ({ "<": "&lt;", ">": "&gt;", "&": "&amp;", '"': "&quot;" }[c]));
   const fmtTime = (s) => (!Number.isFinite(s) ? "--" : s < 60 ? `${s.toFixed(1)}s` : `${(s / 60).toFixed(1)}m`);
@@ -233,7 +236,7 @@
     if ($("#chart") && window.MetricChart) state.chart = new window.MetricChart($("#chart"));
     // 主舞台那张"一边学一边长"的曲线（引导态也能看到，不藏在进阶里）
     if ($("#stage-chart") && window.MetricChart) {
-      state.stageChart = new window.MetricChart($("#stage-chart"), { mode: "acc" });
+      state.stageChart = new window.MetricChart($("#stage-chart"), { mode: "loss" });
     }
 
     /* -------------------------------------------------- 房间切换 */
@@ -1323,6 +1326,14 @@
         meta.push(`学了 ${epochs} 遍`);
       } else {
         meta.push(`学了 ${(detail && (detail.history || []).length) || epochs} 遍`);
+        // 数据集回报：训练集 / 考卷各多少窗（窗口数才是网络真正看到的样本数），
+        // 考卷再补一句真人条数——"考卷是不是那批没进训练的真人录音"一眼可查
+        if (Number.isFinite(result.n_train)) meta.push(`训练 ${fmtCount(result.n_train)} 窗`);
+        if (Number.isFinite(result.n_val)) {
+          const split = result.human_split || {};
+          const humanVal = split.val ? Number(split.val[0] || 0) + Number(split.val[1] || 0) : 0;
+          meta.push(`考卷 ${fmtCount(result.n_val)} 窗` + (humanVal ? `（真人 ${humanVal} 条）` : ""));
+        }
         const secs = Number(result.elapsed_s);
         if (Number.isFinite(secs)) meta.push(`${secs.toFixed(1)} 秒`);
         const params = Number(result.params_total);
@@ -1476,6 +1487,8 @@
           <div class="model-tile__meta">
             <span>耗时 ${fmtTime(run.elapsed_s)}</span>
             ${run.params_total ? `<span>${(run.params_total / 1000).toFixed(1)}k 参数</span>` : ""}
+            ${Number.isFinite(run.n_train) ? `<span>训练 ${fmtCount(run.n_train)} 窗</span>` : ""}
+            ${Number.isFinite(run.n_val) ? `<span>考卷 ${fmtCount(run.n_val)} 窗</span>` : ""}
           </div>
           <div class="model-tile__actions">
             <button class="btn btn--primary btn--sm" type="button" data-act="apply"
@@ -1555,8 +1568,12 @@
       const status = detail.status || {};
       const final = result.final || status.final || {};
       const history = detail.history || [];
-      $("#metric-val").textContent = pct(final.val_acc);
-      $("#metric-train").textContent = pct(final.train_acc);
+      // 主指标是 loss：老 run 的 final 里可能没有 loss 字段，回落到 history 最后一行
+      const last = history[history.length - 1] || {};
+      const valLoss = Number.isFinite(final.val_loss) ? final.val_loss : last.val_loss;
+      const trainLoss = Number.isFinite(final.train_loss) ? final.train_loss : last.train_loss;
+      $("#metric-val").textContent = fmtLoss(valLoss);
+      $("#metric-train").textContent = fmtLoss(trainLoss);
       $("#metric-params").textContent = result.params_total
         ? (result.params_total / 1000).toFixed(1) + "k" : "--";
       $("#metric-time").textContent = fmtTime(result.elapsed_s || status.elapsed_s);
@@ -1667,8 +1684,8 @@
         syncResultCard();
         if (state.chart) state.chart.push(row);
         $("#chart-empty").hidden = true;
-        $("#metric-val").textContent = pct(row.val_acc);
-        $("#metric-train").textContent = pct(row.train_acc);
+        $("#metric-val").textContent = fmtLoss(row.val_loss);
+        $("#metric-train").textContent = fmtLoss(row.train_loss);
       }
 
       // SSE 事件可能被中间代理缓冲甚至掐断（公网预览尤其常见）：一条 2.5s 的
@@ -1789,6 +1806,11 @@
       const model = ($("#model-grid input:checked") || {}).value || "cnn";
       const body = {
         model,
+        // 进阶里的三个数字也要跟着页面走：以前重跑只照抄旧 run，把 epochs 从 30 改到 50
+        // 再点「用当前模型再训」，实际还是只学 30 遍，看着像参数没生效
+        epochs: Number($("#epochs").value),
+        batch: Number($("#batch").value),
+        lr: Number($("#lr").value),
         max_pos: Number($("#max-pos").value),
         max_neg: Number($("#max-neg").value),
         wake_word_id: state.dataset || null,

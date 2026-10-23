@@ -48,6 +48,29 @@ app = FastAPI(title="Nova Voice Lab", docs_url=None, redoc_url=None,
 app.mount("/static", StaticFiles(directory=str(settings.STATIC_DIR)), name="static")
 
 
+def static_ver() -> str:
+    """静态资源的版本号（取 static/ 里最新的 mtime），模板里挂成 `?v=`。
+
+    StaticFiles 只给 Last-Modified/ETag、不给 Cache-Control，浏览器按启发式缓存
+    直接吃本地副本；改完前端经常"没生效"（2026-10-23 线上踩过：图例已是 Loss，
+    曲线还是旧的 acc 口径）。
+    """
+    try:
+        return str(int(max((p.stat().st_mtime for p in settings.STATIC_DIR.iterdir()
+                            if p.is_file()), default=0.0)))
+    except OSError:
+        return "0"
+
+
+@app.middleware("http")
+async def static_revalidate(request: Request, call_next):
+    """静态资源回源校验（配合模板里的 ?v=，双保险）。"""
+    response = await call_next(request)
+    if request.url.path.startswith("/static/"):
+        response.headers.setdefault("Cache-Control", "no-cache")
+    return response
+
+
 @app.middleware("http")
 async def guard_body_size(request: Request, call_next):
     """在解析 multipart 之前先按 Content-Length 拦掉超大请求。"""
@@ -106,7 +129,8 @@ def studio(request: Request, step: str = "", tab: str = ""):
         context={"active": active, "step": want, "wake_word": "buddy助手",
                  "check_word": check_word,
                  "min_pos": settings.MIN_POS, "min_neg": settings.MIN_NEG,
-                 "min_word_pos": settings.MIN_WORD_POS},
+                 "min_word_pos": settings.MIN_WORD_POS,
+                 "static_ver": static_ver()},
     )
 
 
@@ -116,7 +140,7 @@ def notes_page(request: Request):
     first = rows[0]["id"] if rows else 0
     return templates.TemplateResponse(
         request=request, name="notes.html",
-        context={"notes": rows, "first": first},
+        context={"notes": rows, "first": first, "static_ver": static_ver()},
     )
 
 
@@ -348,7 +372,10 @@ def _validate_run(body: RunIn) -> dict:
         "seed": body.seed,          # 只决定考卷（页面固定默认值）
         "max_pos": int(body.max_pos),
         "max_neg": int(body.max_neg),
-        # 考卷口径：真人只做考卷（老 run 的 config 没有这个字段，rerun 时会补）
+        # 真人进训练集的配额（其余固定当考卷）：配额固定给满，见 trainer/data.py
+        "human_train_pos": int(settings.HUMAN_TRAIN_POS),
+        "human_train_neg": int(settings.HUMAN_TRAIN_NEG),
+        # 考卷口径：真人里留出的那批（老 run 的 config 没有这个字段，rerun 时会补）
         "split_by": "human",
         # 初始化起点默认随机：同一份声音 + 同一个 seed 训两遍会逐位相同，
         # 孩子会以为"根本没重新训练"。random 起点让每次都能看到曲线不一样。
@@ -452,13 +479,17 @@ def export_run(run_id: str):
 
 
 class RerunIn(BaseModel):
-    """重跑时允许覆盖的设置：模型卡、两个滑杆、以及当前数据集（唤醒词）。
+    """重跑时允许覆盖的设置：模型卡、epochs / batch / lr、两个滑杆、以及当前数据集。
 
-    其余（epochs / batch / lr）仍照抄原 run，保证曲线可比。
+    这些字段以前照抄原 run，页面上把 epochs 从 30 改成 50 再点「再学一遍」，
+    实际还是只学 30 遍（学生以为参数没生效）。不传 = 沿用原 run，兼容老客户端。
     `default_word` 用来显式表示"这次用默认词"——否则 `wake_word_id=None`
     和"没传"分不开，学生切回默认数据集后重跑还会训旧的自定义词。
     """
     model: str | None = None
+    epochs: int | None = None
+    batch: int | None = None
+    lr: float | None = None
     max_pos: int | None = None
     max_neg: int | None = None
     wake_word_id: str | None = None
@@ -484,8 +515,11 @@ def rerun(run_id: str, body: RerunIn | None = None):
     else:
         wake_id = wake.get("id")             # 没动数据集：沿用原 run 的词
     run_body = RunIn(model=over.model or cfg.get("model", "cnn"),
-                     epochs=int(cfg.get("epochs", 30)), batch=int(cfg.get("batch", 16)),
-                     lr=float(cfg.get("lr", 1e-3)),
+                     epochs=int(over.epochs if over.epochs is not None
+                                else cfg.get("epochs", 30)),
+                     batch=int(over.batch if over.batch is not None
+                               else cfg.get("batch", 16)),
+                     lr=float(over.lr if over.lr is not None else cfg.get("lr", 1e-3)),
                      val_ratio=float(cfg.get("val_ratio", 0.12)),
                      seed=int(cfg.get("seed", 42)),
                      max_pos=int(over.max_pos if over.max_pos is not None
@@ -496,8 +530,11 @@ def rerun(run_id: str, body: RerunIn | None = None):
                      use_builtin=bool(cfg.get("use_builtin", True)),
                      wake_word_id=wake_id)
     new_cfg = _validate_run(run_body)
-    # 老 run（上线前）用的是 clip 随机考卷：重跑要沿用同一张卷的口径，否则 val_acc 不可比
-    new_cfg["split_by"] = cfg.get("split_by", "clip")
+    # 考卷口径一律用当前口径（human：训练时留出的真人录音），不再照抄老 run 的
+    # `clip` —— clip 是从整池随机抽窗口，同一段录音的窗口会同时出现在训练集和考卷里，
+    # val_acc 于是虚高、也看不出"没见过的真人"到底认不认得。
+    # 同一张卷靠 `seed`（切分种子）+ 真人配额固定来保证，不靠 split_by 照抄。
+    new_cfg["split_by"] = "human"
     new_id = jobs.start(new_cfg)
     return {"id": new_id, "config": new_cfg}
 

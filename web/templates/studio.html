@@ -206,8 +206,8 @@
         </div>
         <canvas id="stage-chart" height="180" role="img" aria-label="训练曲线"></canvas>
         <div class="result-card__legend">
-          <span><i class="legend__line"></i>它练的</span>
-          <span><i class="legend__line legend__line--dash"></i>它考的</span>
+          <span title="Loss 越低越好"><i class="legend__line"></i>它练的 Loss</span>
+          <span title="Loss 越低越好"><i class="legend__line legend__line--dash"></i>它考的 Loss</span>
         </div>
         <p class="result-card__when" id="result-when"></p>
       </div>
@@ -250,16 +250,16 @@
         <div class="param-row">
           <div class="param-row__head">
             <b>训练数据集大小</b>
-            <span class="hint">真人录音只做考卷，合成语料用来训练；超出上限自动抽样。</span>
+            <span class="hint">上限是训练集总条数：真人固定 30 / 50 条进训练（其余当考卷），剩下的名额给合成语料，人声不够时由合成音补满。</span>
           </div>
           <div class="slider-grid">
             <label class="slider">
               <span>正例上限 <b id="max-pos-val">50</b></span>
-              <input id="max-pos" type="range" min="30" max="50" step="5" value="50">
+              <input id="max-pos" type="range" min="30" max="80" step="5" value="50">
             </label>
             <label class="slider">
-              <span>负例上限 <b id="max-neg-val">300</b></span>
-              <input id="max-neg" type="range" min="100" max="300" step="10" value="300">
+              <span>负例上限 <b id="max-neg-val">150</b></span>
+              <input id="max-neg" type="range" min="100" max="350" step="10" value="150">
             </label>
           </div>
         </div>
@@ -286,8 +286,8 @@
         </div>
 
         <div class="metric-row">
-          <div><span>val_acc</span><b id="metric-val">--</b></div>
-          <div><span>train_acc</span><b id="metric-train">--</b></div>
+          <div><span>val_loss</span><b id="metric-val">--</b></div>
+          <div><span>train_loss</span><b id="metric-train">--</b></div>
           <div><span>参数量</span><b id="metric-params">--</b></div>
           <div><span>耗时</span><b id="metric-time">--</b></div>
         </div>
@@ -450,7 +450,7 @@
 {% endblock %}
 
 {% block scripts %}
-<script src="/static/charts.js" defer></script>
-<script src="/static/recorder.js" defer></script>
-<script src="/static/app.js" defer></script>
+<script src="/static/charts.js?v={{ static_ver }}" defer></script>
+<script src="/static/recorder.js?v={{ static_ver }}" defer></script>
+<script src="/static/app.js?v={{ static_ver }}" defer></script>
 {% endblock %}

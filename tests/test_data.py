@@ -197,6 +197,60 @@ def test_training_clips_are_capped_and_humans_are_kept(tmp_path):
     assert len(stats["human_groups"]) == 9
 
 
+def test_human_quota_stays_fixed_and_only_synth_shrinks(tmp_path):
+    """滑杆缩小时只减合成音，真人配额（30/50）一条不减；考卷那批人不变。"""
+    root = tmp_path / "corpus"
+    _many(root, "pos", 60, synth=True)
+    _many(root, "pos", 40, synth=False)
+    _many(root, "neg", 320, synth=True)
+    _many(root, "neg", 60, synth=False)
+
+    big, small = {}, {}
+    *_, y_big, _t, _f, g_big, _m = load_dataset(
+        str(root), max_pos=50, max_neg=150, stats=big)
+    *_, y_small, _t, _f, g_small, _m = load_dataset(
+        str(root), max_pos=30, max_neg=100, stats=small)
+
+    def count_of(groups, y, lab, exam, synth):
+        return len({g for g, v in zip(groups, y)
+                    if v == lab and ("-synth-" in g) is synth and g not in exam})
+
+    exam_big, exam_small = set(big["val_groups"]), set(small["val_groups"])
+    # 小人数的滑杆：真人照样 30/50，只是合成音的名额被压到 0 / 50
+    assert count_of(g_small, y_small, 1, exam_small, False) == 30
+    assert count_of(g_small, y_small, 0, exam_small, False) == 50
+    assert count_of(g_small, y_small, 1, exam_small, True) == 0
+    assert count_of(g_small, y_small, 0, exam_small, True) == 50
+    # 默认滑杆 50/150：真人 30/50 + 合成 20/100
+    assert count_of(g_big, y_big, 1, exam_big, False) == 30
+    assert count_of(g_big, y_big, 0, exam_big, False) == 50
+    assert count_of(g_big, y_big, 1, exam_big, True) == 20
+    assert count_of(g_big, y_big, 0, exam_big, True) == 100
+
+    # 考卷是同一批人：换滑杆不会把考卷换成别人的录音
+    assert big["val_groups"] == small["val_groups"]
+
+
+def test_default_cap_is_human_quota_plus_synth(tmp_path):
+    """默认上限 50/150 = 真人 30/50 + 合成 20/100。"""
+    root = tmp_path / "corpus"
+    _many(root, "pos", 60, synth=True)
+    _many(root, "pos", 40, synth=False)
+    _many(root, "neg", 320, synth=True)
+    _many(root, "neg", 60, synth=False)
+
+    stats = {}
+    *_, y, _t, _f, groups, _m = load_dataset(str(root), stats=stats)
+
+    exam = set(stats["val_groups"])
+    for lab, key, cap, human, synth in ((1, "pos", 50, 30, 20),
+                                        (0, "neg", 150, 50, 100)):
+        assert stats[key]["limit"] == cap
+        assert stats[key]["human"] == human
+        assert stats[key]["synth"] == synth
+        assert len({g for g, v in zip(groups, y) if v == lab and g not in exam}) == cap
+
+
 def test_sampling_is_deterministic(tmp_path):
     """同一份语料 + 同一种子 → 抽到同一批（rerun 才能复用考卷）。"""
     root = tmp_path / "corpus"

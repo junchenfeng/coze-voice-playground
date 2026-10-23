@@ -103,10 +103,16 @@ WORD_SYNTH_PER_VOICE = 2
 WORD_SYNTH_MAX = int(os.environ.get("NOVA_WORD_SYNTH_MAX", 40))
 
 # 训练装载上限（页面上「训练数据集大小」两个滑杆的边界与默认值）。
+# 上限 = 训练集总条数（真人 + 合成），默认 50/150 = 真人 30/50 + 合成 20/100；
+# 人声不够（少于真人配额）时由合成音补满到上限。
 TRAIN_MAX_POS = int(os.environ.get("NOVA_TRAIN_MAX_POS", 50))
-TRAIN_MAX_NEG = int(os.environ.get("NOVA_TRAIN_MAX_NEG", 300))
-TRAIN_MAX_POS_RANGE = (30, 50)
-TRAIN_MAX_NEG_RANGE = (100, 300)
+TRAIN_MAX_NEG = int(os.environ.get("NOVA_TRAIN_MAX_NEG", 150))
+TRAIN_MAX_POS_RANGE = (30, 80)
+TRAIN_MAX_NEG_RANGE = (100, 350)
+# 真人录音的分配：每类固定抽这么多条进训练集，其余全部当考卷。
+# 滑杆缩小时**先减合成音**，真人配额不缩——真人样本太少才是过拟合到合成音色的主因。
+HUMAN_TRAIN_POS = int(os.environ.get("NOVA_HUMAN_TRAIN_POS", 30))
+HUMAN_TRAIN_NEG = int(os.environ.get("NOVA_HUMAN_TRAIN_NEG", 50))
 
 # 页面上可选的三张模型卡：简单 CNN / 复杂 CNN / 预训练底座。
 # mlp 只留给 CLI（trainer.train --model mlp）兼容老实验，前端不再暴露。

@@ -53,10 +53,16 @@ def _build_cmd(run_id: str, config: dict) -> list[str]:
         "--lr", repr(float(config["lr"])),
         "--val-ratio", str(config["val_ratio"]),
         "--seed", str(config["seed"]),
-        # 真人录音只做考卷、合成片段才进训练集；某类真人不足时 trainer 内部回落 clip
+        # 考卷口径：human = 训练时留出的那批真人录音（某类没真人时 trainer 回落 clip）。
+        # 老 config 没有这个字段时才按 clip 走；页面上的「再学一遍」会显式写 human。
         "--split-by", str(config.get("split_by", "clip")),
         "--max-pos", str(int(config.get("max_pos", settings.TRAIN_MAX_POS))),
         "--max-neg", str(int(config.get("max_neg", settings.TRAIN_MAX_NEG))),
+        # 真人进训练集的配额（其余当固定考卷）；老 config 没有就兜默认值
+        "--human-train-pos",
+        str(int(config.get("human_train_pos", settings.HUMAN_TRAIN_POS))),
+        "--human-train-neg",
+        str(int(config.get("human_train_neg", settings.HUMAN_TRAIN_NEG))),
         "--threads", str(settings.TRAIN_THREADS),
         "--out", str(run_path / "result.json"),
         "--save-ckpt", str(run_path / "model.pt"),
