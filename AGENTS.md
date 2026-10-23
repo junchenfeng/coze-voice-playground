@@ -100,6 +100,17 @@ bash scripts/validate.sh         # pytest
 .venv/bin/python -m pytest tests -q -k export
 ```
 
+**沙箱装依赖注意**：本沙箱会掐 Python socket 的大文件下载（TLS 握手正常、请求发出后
+收不到数据，pip 会卡死），curl 与 Rust 系工具不受影响。若 `prepare.sh` 卡在
+pip install，改用 uv 直装（已装在 /root/.local/bin）：
+
+```bash
+uv pip install --python .venv/bin/python -r requirements.txt -i https://mirrors.aliyun.com/pypi/simple/
+uv pip install --python .venv/bin/python "torch==2.6.0+cpu" -i https://download.pytorch.org/whl/cpu
+```
+
+系统缺 python3.12-venv 时先 `apt-get update && apt-get install -y python3.12-venv`。
+
 改 `.coze` 里的入口脚本、`web/settings.py` 的路径口径、`trainer/np_cnn.py` 的权重键时，
 记得同步 `tests/`（`test_export.py` 会逐位比对 torch 与 numpy）。
 
