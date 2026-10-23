@@ -5,6 +5,7 @@
 而不是只在整段居中裁 1 s 的干净样本上训练。
 """
 import glob
+import hashlib
 import json
 import os
 import wave
@@ -144,6 +145,60 @@ def _featurize_for(model):
     return logmel
 
 
+# ---- 特征缓存：同一条录音、同一种口径只提一次特征 --------------------------
+# 每次训练都是新子进程，350 条语料逐条解码+提特征（head 还要逐窗口跑 ONNX）
+# 纯属重复劳动。这里按「窗口口径 + 模型 + 软标签 + 文件内容 sha256」落盘 npz，
+# 第二次训练直接读，head 连底座都不用加载。目录按窗口口径指纹命名：
+# 口径（SR/WIN/offsets）一改，旧缓存自动全部失效，不会污染新实验。
+FEAT_CACHE_ENV = "NOVA_FEATURE_CACHE"
+_WINDOW_FP = f"v1-{SR}-{WIN}-{PAD}-{POS_OFFSETS}-{NEG_OFFSETS}"
+
+
+def _feat_cache_dir(model):
+    base = os.environ.get(FEAT_CACHE_ENV)
+    if not base:
+        base = os.path.join(os.path.dirname(os.path.dirname(os.path.abspath(__file__))),
+                            ".cache", "features")
+    return os.path.join(base, f"{_WINDOW_FP}-{model}")
+
+
+def _file_sha256(path):
+    h = hashlib.sha256()
+    with open(path, "rb") as f:
+        for chunk in iter(lambda: f.read(1 << 20), b""):
+            h.update(chunk)
+    return h.hexdigest()
+
+
+def _cache_read(model, label, sha):
+    """命中返回 {"ok", "x", "t"}；无声录音 ok=0（x/t 为空数组）。"""
+    path = os.path.join(_feat_cache_dir(model), f"{label}-{sha}.npz")
+    try:
+        with np.load(path) as z:
+            return {"ok": int(z["ok"]), "x": z["x"], "t": z["t"]}
+    except (OSError, ValueError, KeyError, EOFError):
+        return None
+
+
+def _cache_write(model, label, sha, ok, x=None, t=None):
+    """写缓存尽力而为：写失败（磁盘满/只读）不影响本次训练。"""
+    d = _feat_cache_dir(model)
+    tmp = os.path.join(d, f"{label}-{sha}.tmp-{os.getpid()}.npz")
+    try:
+        os.makedirs(d, exist_ok=True)
+        payload = {"ok": np.int64(ok)}
+        if x is not None:
+            payload["x"] = x
+            payload["t"] = t
+        np.savez(tmp, **payload)      # tmp 以 .npz 结尾，savez 不会再补后缀
+        os.replace(tmp, os.path.join(d, f"{label}-{sha}.npz"))
+    except OSError:
+        try:
+            os.unlink(tmp)
+        except OSError:
+            pass
+
+
 def load_dataset(root, extra_roots=(), model="mlp", expand=True, pos_dir=None,
                  max_pos=MAX_POS_CLIPS, max_neg=MAX_NEG_CLIPS, sample_seed=0,
                  stats=None):
@@ -168,6 +223,10 @@ def load_dataset(root, extra_roots=(), model="mlp", expand=True, pos_dir=None,
 
     stats 传一个 dict 进来，会写入抽样明细（before/after/limit/human/synth）与
     `human_groups`（真人录音的文件名集合，给 make_split(split_by="human") 用）。
+
+    特征按「录音内容 sha256 + 模型 + 软标签口径」落盘缓存（.cache/features），
+    第二次装载同一份语料直接读缓存——head 的 ONNX 特征尤其受益；目录可随时
+    整个删除，只会退回首次提取的耗时。
     """
     if stats is None:
         stats = {}
@@ -180,7 +239,8 @@ def load_dataset(root, extra_roots=(), model="mlp", expand=True, pos_dir=None,
             continue
         roots.append((extra, os.path.basename(os.path.normpath(extra)) + "/"))
 
-    featurize = _featurize_for(model)
+    # 特征提取器惰性创建：全部命中缓存时（head 场景）连 ONNX 底座都不用加载。
+    featurize = None
     meta, X, y, t, files, groups = {}, [], [], [], [], []
     skipped = []
     local_cache: dict[str, dict] = {}
@@ -264,19 +324,45 @@ def load_dataset(root, extra_roots=(), model="mlp", expand=True, pos_dir=None,
 
     for _idx, label, p, name, base, rel in kept_entries:
         local = _local(base)
+        meta_row = local.get(rel)
+        sha = _file_sha256(p)
+        cached = _cache_read(model, label, sha) if expand else None
+        if cached is not None:
+            if cached["ok"] == 0:
+                skipped.append(name)      # 以前就判过无声：不再解码验证
+            else:
+                xs, ts = cached["x"], cached["t"]
+                X.extend(list(xs))
+                y.extend([label] * len(ts))
+                t.extend(list(ts))
+                files.extend(f"{name}#{k}" for k in range(len(ts)))
+                groups.extend([name] * len(ts))
+            if meta_row is not None:
+                meta[name] = {**meta_row, "file": name}
+            continue
         pcm = read_wav(p)
         if not has_speech(pcm):
             skipped.append(name)          # 空录音 / 底噪：不进训练，也不占考卷
+            _cache_write(model, label, sha, ok=0)
             continue
         wins = make_windows(pcm, label) if expand else [(pcm[:WIN], float(label))]
+        xs, ts = [], []
+        if featurize is None:
+            featurize = _featurize_for(model)
         for k, (win, target) in enumerate(wins):
-            X.append(featurize(win))
+            xs.append(featurize(win))
+            ts.append(target)
+        if expand:
+            _cache_write(model, label, sha, ok=1,
+                         x=np.stack(xs), t=np.array(ts, dtype=np.float32))
+        for k, (xv, tv) in enumerate(zip(xs, ts)):
+            X.append(xv)
             y.append(label)
-            t.append(target)
+            t.append(tv)
             files.append(f"{name}#{k}")
             groups.append(name)
-        if rel in local:
-            meta[name] = {**local[rel], "file": name}
+        if meta_row is not None:
+            meta[name] = {**meta_row, "file": name}
     if skipped:
         head = "、".join(skipped[:4])
         more = "" if len(skipped) <= 4 else f" 等 {len(skipped)} 条"

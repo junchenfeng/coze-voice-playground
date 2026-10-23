@@ -11,8 +11,9 @@ import wave
 
 _TMP = tempfile.mkdtemp(prefix="nova-web-tests-")
 os.environ["NOVA_DATA_ROOT"] = _TMP
-# 缓存也放进临时目录：种子语料 / 合成音频的下载不该污染工作区
+# 缓存也放进临时目录：种子语料 / 合成音频 / 特征缓存的下载不该污染工作区
 os.environ.setdefault("NOVA_CACHE_ROOT", os.path.join(_TMP, ".cache"))
+os.environ.setdefault("NOVA_FEATURE_CACHE", os.path.join(_TMP, ".cache", "features"))
 os.environ["NOVA_MAX_RUNNING_TRAININGS"] = "1"
 # 测试里不发真实网络请求：把 OSS/CDN 都指到 127.0.0.1:9（立刻 connection refused）
 os.environ.setdefault("OSS_CDN_BASE", "http://127.0.0.1:9/cdn")
@@ -35,6 +36,10 @@ def fresh_store():
                  settings.SEED_CACHE_ROOT, settings.SYNTH_CACHE_ROOT):
         shutil.rmtree(path, ignore_errors=True)
         path.mkdir(parents=True, exist_ok=True)
+    # 特征缓存在 trainer 侧（不在 web.settings 里）：每个用例前清空，保证隔离
+    feat_cache = os.environ.get("NOVA_FEATURE_CACHE")
+    if feat_cache:
+        shutil.rmtree(feat_cache, ignore_errors=True)
     settings.ACTIVE_PATH.unlink(missing_ok=True)
     settings.SYNTH_INDEX.unlink(missing_ok=True)
     # 笔记是仓库里的静态内容：临时 data 根里放一份，/notes 才有东西可渲染
