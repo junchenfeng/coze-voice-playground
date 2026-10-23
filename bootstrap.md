@@ -15,8 +15,9 @@ python3 --version    # 需要 ≥ 3.10（.coze 声明 python-3.12）
 node --version       # 仅 dev.sh 的 detached 启动用；没有 node 就前台跑 uvicorn
 ```
 
-两条都没有时：`.coze` 里已经声明 `requires = ["python-3.12", "nodejs-24"]`，在扣子编程
-环境里重建一次运行时会自动装好；不要在项目里塞二进制安装包。
+只有 python3 时：`.coze` 只声明 `requires = ["python-3.12"]`（部署管线仅接受一个
+runtime requirement）；dev.sh 没有 node 会自动退回 setsid detached 启动，dev/deploy
+都不需要 node。不要在项目里塞二进制安装包。
 
 ## 2. 装依赖（含 torch CPU）
 

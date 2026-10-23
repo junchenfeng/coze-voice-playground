@@ -8,7 +8,13 @@ cd "${COZE_WORKSPACE_PATH}"
 
 PYTHON="${COZE_WORKSPACE_PATH}/.venv/bin/python"
 if [[ ! -x "${PYTHON}" ]]; then
-  echo "缺少 .venv：先跑 bash scripts/prepare.sh（或 bash scripts/bootstrap.sh）" >&2
+  # .venv 不入 git；部署环境全新 checkout 时现场补建（prepare.sh 幂等）。
+  echo "[build] .venv 缺失，先跑 scripts/prepare.sh 现场补建…"
+  bash ./scripts/prepare.sh
+fi
+PYTHON="${COZE_WORKSPACE_PATH}/.venv/bin/python"
+if [[ ! -x "${PYTHON}" ]]; then
+  echo "缺少 .venv：prepare.sh 也没能建出来，无法继续构建" >&2
   exit 1
 fi
 

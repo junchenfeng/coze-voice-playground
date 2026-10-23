@@ -2,8 +2,10 @@
 # 开发态启动：uvicorn --reload，detached 到独立进程组（照抄参考项目 dev.sh 的做法）。
 #
 # 为什么不能直接 `uvicorn ...`：coze-daemon 会在 runtime shell 退出时清理原进程组，
-# 服务会被一起杀掉。所以借 node 的 detached spawn 把 wrapper 挪进独立 session，
-# wrapper 再带一个到点自尽的 watchdog，避免端口/内存长期泄露。
+# 服务会被一起杀掉。所以优先借 node 的 detached spawn 把 wrapper 挪进独立 session；
+# .coze 只声明 python-3.12（部署管线仅接受一个 runtime），node 不在 requires 里，
+# 没有 node 时自动退回 setsid 纯 bash 方案。wrapper 再带一个到点自尽的 watchdog，
+# 避免端口/内存长期泄露。
 set -Eeuo pipefail
 
 PORT=5000
@@ -65,13 +67,43 @@ wait "${child_pid}"
 kill -KILL -- "-$$" 2>/dev/null || true
 '
 
+spawn_detached_bash() {
+  # 无 node 时的兜底：setsid 起独立会话，效果同 node 的 detached spawn。
+  # 由内层会话首进程自己把 PID 写进临时文件，外层读回来当 server_pid。
+  local cwd="$1"
+  local log_file="$2"
+  shift 2
+
+  local pid_tmp="${log_file}.spawn-pid"
+  rm -f "${pid_tmp}"
+  RUN_WITH_TIMEOUT="${RUN_WITH_TIMEOUT}" setsid bash -c '
+    echo "$$" > "$3"
+    cd "$1" || exit 1
+    shift
+    log="$1"; shift
+    shift   # 消费掉 pid_tmp，让 "$@" 回到 (timeout, cmd...)
+    exec bash -c "$RUN_WITH_TIMEOUT" detached-runner "$@" >>"$log" 2>&1
+  ' _ "${cwd}" "${log_file}" "${pid_tmp}" \
+    "${MAX_RUNTIME_SECONDS}" "$@" </dev/null >/dev/null 2>&1 &
+
+  local i pid
+  for i in 1 2 3 4 5 6 7 8 9 10; do
+    [[ -s "${pid_tmp}" ]] && break
+    sleep 0.1
+  done
+  pid="$(cat "${pid_tmp}" 2>/dev/null || true)"
+  rm -f "${pid_tmp}"
+  printf '%s' "${pid}"
+}
+
 spawn_detached() {
   local cwd="$1"
   local log_file="$2"
   shift 2
 
-  node - "$cwd" "$log_file" \
-    /bin/bash -c "${RUN_WITH_TIMEOUT}" detached-runner "${MAX_RUNTIME_SECONDS}" "$@" <<'NODE'
+  if command -v node >/dev/null 2>&1; then
+    node - "$cwd" "$log_file" \
+      /bin/bash -c "${RUN_WITH_TIMEOUT}" detached-runner "${MAX_RUNTIME_SECONDS}" "$@" <<'NODE'
 const fs = require('node:fs');
 const { spawn } = require('node:child_process');
 
@@ -94,6 +126,9 @@ try {
   fs.closeSync(logFd);
 }
 NODE
+  else
+    spawn_detached_bash "${cwd}" "${log_file}" "$@"
+  fi
 }
 
 stop_detached() {

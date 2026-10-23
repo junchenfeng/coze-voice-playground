@@ -1,11 +1,13 @@
 [project]
-requires = [ "python-3.12", "nodejs-24" ]
+# 部署管线只接受一个 runtime requirement；业务是 Python，deploy 路径（build.sh/start.sh）
+# 纯 Python，不声明 nodejs。dev.sh 的 detached spawn 优先用沙箱基础镜像自带的 node，
+# 没有 node 时自动退回 setsid（见 scripts/dev.sh）。
+requires = [ "python-3.12" ]
 project_type = "web"
 version = "0.1.0"
 appliedPatches = [ ]
 
-# nodejs 不是给业务用的：coze-daemon 会在 runtime shell 退出时清理原进程组，
-# dev.sh 借 node 的 detached spawn 把 uvicorn 挪进独立 session（与参考项目一致）。
+# dev.sh 的 detached spawn 优先用基础镜像自带的 node，无 node 时退回 setsid（见脚本头注释）。
 [dev]
 build = [ "bash", "./scripts/prepare.sh" ]
 run = [ "bash", "./scripts/dev.sh" ]
