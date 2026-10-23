@@ -36,3 +36,6 @@
 > 页面只渲染 `## 摘要` ~ `## 附录` 之间的部分，并强制剥掉「给 Agent 的指令」整节。
 
 当前已发布 1 篇（`note-1.md`：三个模型同一场考试）；其余 2~4 未发布，页面不显示。
+笔记 1 的预计算数据包在 `reports/data/research-note-1-data.json`（seed=42 真实训练固化，
+原始 result.json 在 `reports/data/trains/`）；`note-1.md` 的「给 Agent 的指令」一节是
+对话引导协议（封存/解封/挑战题规则），网页永不展示。
